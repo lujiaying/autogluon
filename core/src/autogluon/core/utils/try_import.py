@@ -1,6 +1,6 @@
 import platform
 
-from .. import __version__
+from ..version import __version__
 
 __all__ = [
     'try_import_mxboard',
