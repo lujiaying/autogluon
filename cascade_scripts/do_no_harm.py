@@ -8,8 +8,8 @@ import time
 from typing import List, Tuple, Dict, Optional
 import argparse
 
-from sklearnex import patch_sklearn
-patch_sklearn()
+# from sklearnex import patch_sklearn
+# patch_sklearn()   # This cause bug!!!
 import pandas as pd
 import numpy as np
 from autogluon.tabular import TabularPredictor, TabularDataset, FeatureMetadata
@@ -272,6 +272,7 @@ def main(args: argparse.Namespace):
     force_training = args.force_training
     run_xtime = args.run_xtime
     exp_result_save_path = args.exp_result_save_path
+    presets = args.predictor_presets
     ndigits = 4
    
     # Cover Type MultiClass
@@ -281,17 +282,7 @@ def main(args: argparse.Namespace):
         path_train = path_prefix + 'train_data.csv'
         path_test = path_prefix + 'test_data.csv'
         eval_metric = 'accuracy'
-        # model_hyperparameters = {
-        #     'NN_TORCH': {},
-        #     'GBM': {},
-        #     'KNN': {},
-        #     'CAT': {},
-        #     'XGB': {},
-        #     'FASTAI': {},
-        # }
-        # presets = 'medium_quality'
         model_hyperparameters = 'default'
-        presets = 'high_quality'
     # Adult Income Dataset
     elif dataset_name == 'Inc':
         path_prefix = 'https://autogluon.s3.amazonaws.com/datasets/Inc/'
@@ -299,17 +290,7 @@ def main(args: argparse.Namespace):
         path_train = path_prefix + 'train.csv'
         path_test = path_prefix + 'test.csv'
         eval_metric = 'roc_auc'
-        # model_hyperparameters = {
-        #     'NN_TORCH': {},
-        #     'GBM': {},
-        #     'KNN': {},
-        #     'CAT': {},
-        #     'XGB': {},
-        #     'FASTAI': {},
-        # }
-        # presets = 'medium_quality'
         model_hyperparameters = 'default'
-        presets = 'best_quality'
     elif dataset_name == 'CPP-6aa99d1a':
         path_prefix = 'datasets/cpp_research_corpora/2021_60datasets/6aa99d1a-1d4b-4d30-bd8b-a26f259b6482/'
         label = 'label'
@@ -317,7 +298,6 @@ def main(args: argparse.Namespace):
         path_test = path_prefix + 'test/part-00001-31cb8e7f-4de7-4c5a-8068-d734df5cc6c7.c000.snappy.parquet'
         eval_metric = 'roc_auc'
         model_hyperparameters = 'default'
-        presets = 'high_quality'
     elif dataset_name == 'CPP-3564a7a7':
         path_prefix = 'datasets/cpp_research_corpora/2021_60datasets/3564a7a7-0e7c-470f-8f9e-5a029be8e616/'
         label = 'label'
@@ -325,15 +305,11 @@ def main(args: argparse.Namespace):
         path_test = path_prefix + 'test/part-00001-9c4bc314-0803-4d61-a7c2-6f74f9c9ccfd.c000.snappy.parquet'
         eval_metric = 'roc_auc'
         model_hyperparameters = 'default'
-        presets = 'high_quality'
     else:
         print(f'currently not support dataset_name={dataset_name}')
         exit(-1)
 
-    # sample = 50000  # Number of rows to use to train
     train_data = TabularDataset(path_train)
-    # if sample is not None and (sample < len(train_data)):
-    #     train_data = train_data.sample(n=sample, random_state=0).reset_index(drop=True)
     test_data = TabularDataset(path_test)
 
     fit_kwargs = dict(
@@ -478,6 +454,9 @@ def main(args: argparse.Namespace):
 
     # store exp_result_df into disk
     print(exp_result_df.round(ndigits))
+    exp_result_save_dir = os.path.dirname(exp_result_save_path)
+    if not os.path.exists(exp_result_save_dir):
+        os.makedirs(exp_result_save_dir)
     exp_result_df.to_csv(exp_result_save_path)
 
 
@@ -489,6 +468,7 @@ if __name__ == '__main__':
     parser.add_argument('--force_training', action='store_true')
     parser.add_argument('--do_multimodal', action='store_true')
     parser.add_argument('--run_xtime', type=int, default=3, help="Run X times of each approach to get stable infer time.")
+    parser.add_argument('--predictor_presets', type=str, default='medium_quality')
     args = parser.parse_args()
     print(f'Exp arguments: {args}')
 
