@@ -6,6 +6,7 @@ Author: Jiaying Lu
 import os
 import time
 from typing import List, Tuple, Dict, Optional
+from functools import partial
 import argparse
 
 # from sklearnex import patch_sklearn
@@ -24,18 +25,30 @@ from .cascade_utils import paretoset, rescale_by_pareto_frontier_model
 from .cascade_utils import SPEED, ERROR, MODEL, SCORE
 from .cascade_utils import get_exp_df_meta_columns
 
-METRIC_FUNC_MAP = {'accuracy': accuracy, 'roc_auc': roc_auc}
+METRIC_FUNC_MAP = {'accuracy': accuracy, 'acc': accuracy, 'roc_auc': roc_auc}
+THRESHOLDS_BINARY = [0.5, 0.6, 0.7, 0.8, 0.85, 0.9, 0.925, 0.95, 0.975, 0.999]
+# generate from softmax(norm.pdf(thresholds, loc=0.9, scale=0.25)
+PROB_BINARY = [0.03932009, 0.05486066, 0.08038427, 0.1100718 , 0.12056911, 0.12443972, 0.12345325, 0.12056911, 0.11600155, 0.11033044]
+# generate from softmax(norm.pdf(thresholds, loc=0.75, scale=0.25)
+THRESHOLDS_MULTICLASS = [0.0, 0.1, 0.25, 0.4, 0.5, 0.6, 0.7, 0.75, 0.8, 0.85, 0.9, 0.95, 0.999]
+PROB_MULTICLASS = [0.02542674, 0.02637472, 0.03100157, 0.04546687, 0.06575639,
+       0.09472447, 0.11937201, 0.1232042 , 0.11937201, 0.10897893,
+       0.09472447, 0.07958616, 0.06601146]
 
 
-def image_id_to_path(image_id: Optional[str]) -> Optional[str]:
+def image_id_to_path(image_id: Optional[str], image_path: str, image_path_suffix: str = ''
+        ) -> Optional[str]:
     if isinstance(image_id, str):
-        image_path = 'datasets/cpp_research_corpora/2021_60datasets_imgs_raw/' + image_id + '.jpg'
+        image_path = image_path + image_id + image_path_suffix
         if os.path.exists(image_path):
             return image_path
         else:
             return None
     else:
         return None
+
+image_id_to_path_cpp = partial(image_id_to_path, 'datasets/cpp_research_corpora/2021_60datasets_imgs_raw/', 'jpg')
+image_id_to_path_petfinder = partial(image_id_to_path, 'datasets/petfinder_processed/', '')
 
 
 def get_cascade_metric_and_time_by_one_threshold(val_data: Tuple[np.ndarray, np.ndarray],
@@ -87,7 +100,7 @@ def get_cascade_metric_and_time_by_one_threshold(val_data: Tuple[np.ndarray, np.
 
 
 def simulate_refit_full_models_pred_proba_margin_time(predictor: TabularPredictor, 
-        cascade_model_seq: List[str]) -> Tuple[dict]:
+        cascade_model_seq: List[str]) -> Tuple[dict, dict]:
     predictor.persist_models('all')   # in order to get model objs
     model_pred_proba_dict: Dict[str, pd.DataFrame] = {}
     model_pred_time_dict: Dict[str, float] = {}   # margin time
@@ -104,6 +117,29 @@ def simulate_refit_full_models_pred_proba_margin_time(predictor: TabularPredicto
         # print(f'{model_name}-{bag_model_name}: {bag_model_cnt=} {time_val_marginal=}')
         model_pred_time_dict[model_name] = bag_time_val_marginal / bag_model_cnt
     return model_pred_proba_dict, model_pred_time_dict
+
+
+def get_models_pred_proba_on_val(predictor: TabularPredictor, cascade_model_seq: List[str]
+        ) -> Tuple[Dict[str, np.ndarray], Dict[str, float], Tuple[np.ndarray, np.ndarray]]:
+    val_data = predictor.load_data_internal('val')   # Tuple[np.array, np.array] for X, Y
+    trainer = predictor._trainer
+    # TODO: This if branch is for refit_full (high-quality presets)
+    # Need to be modified
+    if val_data[0] is None and val_data[1] is None:
+        model_pred_proba_dict, model_pred_time_marginal_dict = \
+                simulate_refit_full_models_pred_proba_margin_time(predictor, cascade_model_seq)
+        val_data = predictor.load_data_internal('train')   # oof_pred actually on train_data
+        # print('bagging strategy')
+        # print(f'{model_pred_time_marginal_dict=}')
+        # print(f'{val_data[0].shape=}, {val_data[1].shape=}')
+        # print(f'{model_pred_proba_dict["RandomForestGini_BAG_L2_FULL"].shape=}')
+    else:
+        # models Not use bagging strategy
+        # run all models on val data in just one time, keep everything in-record
+        # this returns **marginal** time
+        model_pred_proba_dict, model_pred_time_marginal_dict = \
+                trainer.get_model_pred_proba_dict(val_data[0], models=cascade_model_seq, record_pred_time=True)
+    return model_pred_proba_dict, model_pred_time_marginal_dict, val_data
 
 
 def hpo_one_param(predictor: TabularPredictor, leaderboard: pd.DataFrame, metric_name: str,
@@ -128,35 +164,21 @@ def hpo_one_param(predictor: TabularPredictor, leaderboard: pd.DataFrame, metric
     # print(f'{cascade_model_seq=}')
 
     # get baseline using full cascade
-    # models_fit_order: List[str] = leaderboard.sort_values('fit_order')['model'].tolist()   # this may only valid for non-bagging
-    # last_model: str = models_fit_order[-1]   # "WeightedEnsemble_L2"
-    last_model: str = predictor.get_model_best()
-    trainer = predictor._trainer
-    problem_type: str = trainer.problem_type   # BINARY or MULTICLASS
-    val_data = predictor.load_data_internal('val')   # Tuple[np.array, np.array] for X, Y
-    if val_data[0] is None and val_data[1] is None:
-        model_pred_proba_dict, model_pred_time_marginal_dict = \
-                simulate_refit_full_models_pred_proba_margin_time(predictor, cascade_model_seq)
-        val_data = predictor.load_data_internal('train')   # oof_pred actually on train_data
-        # print('bagging strategy')
-        # print(f'{model_pred_time_marginal_dict=}')
-        # print(f'{val_data[0].shape=}, {val_data[1].shape=}')
-        # print(f'{model_pred_proba_dict["RandomForestGini_BAG_L2_FULL"].shape=}')
-    else:
-        # models Not use bagging strategy
-        # run all models on val data in just one time, keep everything in-record
-        # this returns **marginal** time
-        model_pred_proba_dict, model_pred_time_marginal_dict = \
-                trainer.get_model_pred_proba_dict(val_data[0], models=cascade_model_seq, record_pred_time=True)
+    model_pred_proba_dict, model_pred_time_marginal_dict, val_data = \
+            get_models_pred_proba_on_val(predictor, cascade_model_seq)
     # print(f'get {model_pred_proba_dict=}, {model_pred_time_marginal_dict=}')
     # print(f'{last_model=}')
+    trainer = predictor._trainer
+    problem_type: str = trainer.problem_type   # BINARY or MULTICLASS
+    last_model: str = cascade_model_seq[-1]
     full_cascade_time = sum(model_pred_time_marginal_dict.values())
     full_cascade_metric_value = METRIC_FUNC_MAP[metric_name](y_true=val_data[1], y_pred=model_pred_proba_dict[last_model])
     num_classes = trainer.num_classes
     # do grid search
     max_HPO_score = 0.0
     cascade_perf_inftime_l = []   # model_name, performance, infer_time
-    for threshold in tqdm.tqdm([0.55, 0.6, 0.65, 0.7, 0.75, 0.8, 0.825, 0.85, 0.875, 0.9, 0.91, 0.92, 0.93, 0.94, 0.95, 0.96, 0.97, 0.98, 0.99]):
+    threshold_candidate = THRESHOLDS_BINARY if problem_type == BINARY else THRESHOLDS_MULTICLASS
+    for threshold in tqdm.tqdm(threshold_candidate):
         metric_value, infer_time = get_cascade_metric_and_time_by_one_threshold(val_data, metric_name, threshold,
                 problem_type, num_classes, cascade_model_seq, model_pred_proba_dict, model_pred_time_marginal_dict)
         cascade_perf_inftime_l.append([f'cascade-{threshold}', metric_value, infer_time])
@@ -212,6 +234,41 @@ def hpo_one_param(predictor: TabularPredictor, leaderboard: pd.DataFrame, metric
         chosen_model_name = chosen_model
         chosen_threshold = None
     return (chosen_model_name, chosen_threshold)
+
+
+def hpo_multi_params_random_search(predictor: TabularPredictor, metric_name: str, 
+        cascade_model_seq: List[str],
+        HPO_score_func_name: str = 'Rescale_Pareto',
+        num_trails: int = 1000,
+        ) -> Tuple[str, List[float]]:
+    """
+    Conduct a randommized search over hyperparameters
+    """
+    rng = np.random.default_rng(0)
+    cascade_len = len(cascade_model_seq)
+    problem_type = predictor._learner.problem_type
+    if problem_type == BINARY:
+        thresholds_cands = THRESHOLDS_BINARY
+        thresholds_probs = PROB_BINARY
+    elif problem_type == MULTICLASS:
+        thresholds_cands = THRESHOLDS_MULTICLASS
+        thresholds_probs = PROB_MULTICLASS
+    else:
+        raise ValueError(f'Not support problem_type={problem_type}')
+
+    # Get val pred proba
+    """
+    model_pred_proba_dict, model_pred_time_marginal_dict, val_data = \
+            get_models_pred_proba_on_val(predictor, cascade_model_seq)
+    last_model: str = cascade_model_seq[-1]
+    full_cascade_time = sum(model_pred_time_marginal_dict.values())
+    full_cascade_metric_value = METRIC_FUNC_MAP[metric_name](y_true=val_data[1], y_pred=model_pred_proba_dict[last_model])
+    """
+    # Get HPO score using one set of sampled thresholds
+    for thresholds in rng.choice(thresholds_cands, size=(num_trails, cascade_len-1), p=thresholds_probs):
+        print(thresholds)
+        exit(0)
+    return 
 
 
 def get_partial_weighted_ensemble_name(predictor: TabularPredictor, base_models: List[str]) -> str:
@@ -274,7 +331,9 @@ def main(args: argparse.Namespace):
     exp_result_save_path = args.exp_result_save_path
     presets = args.predictor_presets
     ndigits = 4
+    hpo_search_n_trials = args.HPO_random_search_trials
    
+    path_val = ''    # by default, dataset not contain validation set
     # Cover Type MultiClass
     if dataset_name == 'CoverTypeMulti':
         path_prefix = 'https://autogluon.s3.amazonaws.com/datasets/CoverTypeMulticlassClassification/'
@@ -291,16 +350,31 @@ def main(args: argparse.Namespace):
         path_test = path_prefix + 'test.csv'
         eval_metric = 'roc_auc'
         model_hyperparameters = 'default'
+    # PetFinder
+    elif dataset_name == 'PetFinder':
+        path_prefix = 'datasets/petfinder_processed/'
+        label = 'AdoptionSpeed'
+        image_col = "Images"
+        path_train = path_prefix + 'train.csv'
+        # We have to use dev, instead of test,
+        # since test.csv NOT release labels
+        path_test = path_prefix + 'dev.csv'
+        eval_metric = 'acc'
+        model_hyperparameters = 'default'
+    # CPP one session
     elif dataset_name == 'CPP-6aa99d1a':
         path_prefix = 'datasets/cpp_research_corpora/2021_60datasets/6aa99d1a-1d4b-4d30-bd8b-a26f259b6482/'
         label = 'label'
+        image_col = 'image_id'
         path_train = path_prefix + 'train/part-00001-31cb8e7f-4de7-4c5a-8068-d734df5cc6c7.c000.snappy.parquet'
         path_test = path_prefix + 'test/part-00001-31cb8e7f-4de7-4c5a-8068-d734df5cc6c7.c000.snappy.parquet'
         eval_metric = 'roc_auc'
         model_hyperparameters = 'default'
+    # CPP on session
     elif dataset_name == 'CPP-3564a7a7':
         path_prefix = 'datasets/cpp_research_corpora/2021_60datasets/3564a7a7-0e7c-470f-8f9e-5a029be8e616/'
         label = 'label'
+        image_col = 'image_id'
         path_train = path_prefix + 'train/part-00001-9c4bc314-0803-4d61-a7c2-6f74f9c9ccfd.c000.snappy.parquet'
         path_test = path_prefix + 'test/part-00001-9c4bc314-0803-4d61-a7c2-6f74f9c9ccfd.c000.snappy.parquet'
         eval_metric = 'roc_auc'
@@ -310,19 +384,30 @@ def main(args: argparse.Namespace):
         exit(-1)
 
     train_data = TabularDataset(path_train)
+    val_data = TabularDataset(path_val) if path_val else None
     test_data = TabularDataset(path_test)
 
     fit_kwargs = dict(
         train_data=train_data,
+        tuning_data=val_data,
         hyperparameters=model_hyperparameters,
         presets=presets,
     )
     if do_multimodal:
+        # currently support PetFinder or CPP
         # update several fit kwargs
         hyperparameters = get_hyperparameter_config('multimodal')
-        image_col = 'image_id'
-        train_data[image_col] = train_data[image_col].apply(image_id_to_path)
-        test_data[image_col] = test_data[image_col].apply(image_id_to_path)
+        if dataset_name == 'PetFinder':
+            # Following tutorial, to use first image for each row
+            train_data[image_col] = train_data[image_col].apply(lambda ele: ele.split(';')[0])
+            test_data[image_col] = test_data[image_col].apply(lambda ele: ele.split(';')[0])
+            train_data[image_col] = train_data[image_col].apply(image_id_to_path_petfinder)
+            test_data[image_col] = test_data[image_col].apply(image_id_to_path_petfinder)
+        elif dataset_name.startswith('CPP-'):
+            train_data[image_col] = train_data[image_col].apply(image_id_to_path_cpp)
+            test_data[image_col] = test_data[image_col].apply(image_id_to_path_cpp)
+        else:
+            raise ValueError(f'Currently NOT support do_multimodal with dataset_name={dataset_name}')
         feature_metadata = FeatureMetadata.from_df(train_data)
         feature_metadata = feature_metadata.add_special_types({image_col: ['image_path']})
         fit_kwargs['hyperparameters'] = hyperparameters
@@ -339,7 +424,7 @@ def main(args: argparse.Namespace):
     else:
         predictor = TabularPredictor.load(model_save_path)
     predictor.persist_models('all')   # to speed-up
-    leaderboard = predictor.leaderboard(test_data)
+    # leaderboard = predictor.leaderboard(test_data)    # TODO: uncomment
     # Load or Create Exp Result df
     meta_cols = get_exp_df_meta_columns(predictor._learner.problem_type)
     if os.path.exists(exp_result_save_path):
@@ -347,6 +432,7 @@ def main(args: argparse.Namespace):
     else:
         exp_result_df = pd.DataFrame(columns=meta_cols).set_index('model').dropna()
 
+    """
     # Infer with each single model of AG stack ensemble
     print('--------')
     best_model = predictor.get_model_best()
@@ -372,6 +458,7 @@ def main(args: argparse.Namespace):
         if model_name == best_model:
             print(f'{model_name}: {test_metrics} | time: {infer_times}s')
     print('--------')
+    """
 
     """
     # Infer Time for fast to slow approach F2SP
@@ -451,6 +538,44 @@ def main(args: argparse.Namespace):
     print(f'{model_name}: cascade_model_seq={cascade_model_seq}, chosen_threshold={chosen_model_name, chosen_threshold}')
     print(f'{model_name}: {test_metrics} | time: {infer_times}s')
     """
+    
+    # Infer Time for F2SP w/ HPO MultiParams
+    print('--------')
+    model_name = 'F2SP/TM(RePrt)'
+    print('F2SP w/ HPO-Multi (Rescale_Pareto):')
+    cascade_model_seq = get_cascade_model_sequence_by_val_marginal_time(leaderboard, predictor)
+    print(f'{cascade_model_seq=}')
+    chosen_model_name, chosen_thresholds \
+            = hpo_multi_params_random_search(predictor, eval_metric, cascade_model_seq, num_trails=hpo_search_n_trials)
+    exit(0)
+    infer_times = []
+    for _ in range(run_xtime):
+        if chosen_model_name == 'cascade':
+            ts = time.time()
+            learner = predictor._learner
+            trainer = predictor._trainer
+            test_data_X = learner.transform_features(test_data)
+            model_pred_proba_dict = trainer.get_model_pred_proba_dict(
+                    test_data_X, cascade_model_seq, fit=False,
+                    cascade=True, cascade_threshold=chosen_threshold
+                    )
+            pred_proba = model_pred_proba_dict[cascade_model_seq[-1]]
+            if learner.problem_type == BINARY:
+                pred_proba = LabelCleanerMulticlassToBinary.convert_binary_proba_to_multiclass_proba(pred_proba)
+            te = time.time()
+        else:
+            ts = time.time()
+            pred_proba = predictor.predict_proba(test_data, model=chosen_model_name)
+            te = time.time()
+        infer_times.append(te-ts)
+    infer_times = sum(infer_times) / len(infer_times)
+    speed = test_data.shape[0] / infer_times
+    test_metrics = predictor.evaluate_predictions(y_true=test_data[label], y_pred=pred_proba, silent=True)
+    test_metric1 = test_metrics[meta_cols[-2]]
+    test_metric2 = test_metrics[meta_cols[-1]]
+    exp_result_df.loc[model_name] = [infer_times, speed, test_metric1, test_metric2]
+    print(f'{model_name}: cascade_model_seq={cascade_model_seq}, chosen_threshold={chosen_model_name, chosen_threshold}')
+    print(f'{model_name}: {test_metrics} | time: {infer_times}s')
 
     # store exp_result_df into disk
     print(exp_result_df.round(ndigits))
@@ -469,6 +594,7 @@ if __name__ == '__main__':
     parser.add_argument('--do_multimodal', action='store_true')
     parser.add_argument('--run_xtime', type=int, default=3, help="Run X times of each approach to get stable infer time.")
     parser.add_argument('--predictor_presets', type=str, default='medium_quality')
+    parser.add_argument('--HPO_random_search_trials', type=int, default=3000)
     args = parser.parse_args()
     print(f'Exp arguments: {args}')
 
