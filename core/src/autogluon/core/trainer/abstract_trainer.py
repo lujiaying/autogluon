@@ -671,7 +671,7 @@ class AbstractTrainer:
                                   fit: bool = False,
                                   record_pred_time: bool = False,
                                   cascade: bool = False,
-                                  cascade_threshold: float = 0.9):
+                                  cascade_threshold: Union[float, List[float]] = 0.9):
         """
         Optimally computes pred_probas (or predictions if regression) for each model in `models`.
         Will compute each necessary model only once and store predictions in a `model_pred_proba_dict` dictionary.
@@ -713,7 +713,7 @@ class AbstractTrainer:
             This process should speed up prediction compared to predicting on the last model for all rows, assuming earlier models are part of the dependency graph of the final model.
             Only valid for binary and multiclass classification.
             Note: When True, only the output of the final model in `models` in `model_pred_proba_dict` should be used.
-        cascade_threshold : float, default = 0.9
+        cascade_threshold : Union[float, List[float]], default = 0.9
             # TODO: Placeholder logic, replace with more complex option
             Threshold to use for determining if a row should exit the cascaded prediction early.
             If any one class has pred_proba>=cascade_threshold, then it exits early.
@@ -744,6 +744,17 @@ class AbstractTrainer:
             model_pred_order = self._construct_model_pred_order(models)
         else:
             model_pred_order = self._construct_model_pred_order_with_pred_dict(models, models_to_ignore=list(model_pred_proba_dict.keys()))
+
+        # Added by Jiaying, for per model threshold
+        if cascade:
+            # models contains cascade models
+            # but model_pred_order contains all models in computation DAG
+            if isinstance(cascade_threshold, float):
+                model_cascade_threshold_dict = {m: cascade_threshold for m in models}
+            elif isinstance(cascade_threshold, list) and all(isinstance(_, float) for _ in cascade_threshold):
+                model_cascade_threshold_dict = {m: t for (m, t) in zip(models, cascade_threshold)}
+            else:
+                raise ValueError(f'get_model_pred_proba_dict() ONLY support input arg cascade_threshold with float or Lost[float], but get {cascade_threshold=}')
 
         iloc_model_dict = dict()
         model_pred_proba_dict_cascade = dict()
@@ -806,11 +817,12 @@ class AbstractTrainer:
                     pred_proba = model_pred_proba_dict[model_name]
                     # Calculate confident predictions based on cascade threshold
                     # TODO: Support more sophisticated methods of calculating whether to keep a prediction
-                    # TODO: Support per-model confidence specification
+                    # Jiaying: Support per-model confidence specification
+                    the_threshold = model_cascade_threshold_dict[model_name]
                     if self.problem_type == BINARY:
-                        confident = (pred_proba >= cascade_threshold) | (pred_proba <= (1-cascade_threshold))
+                        confident = (pred_proba >= the_threshold) | (pred_proba <= (1-the_threshold))
                     elif self.problem_type == MULTICLASS:
-                        confident = (pred_proba >= cascade_threshold).any(axis=1)
+                        confident = (pred_proba >= the_threshold).any(axis=1)
                     else:
                         raise AssertionError(f'Invalid cascade problem_type: {self.problem_type}')
                     unconfident_cur = ~confident
