@@ -472,6 +472,7 @@ def main(args: argparse.Namespace):
     else:
         exp_result_df = pd.DataFrame(columns=meta_cols).set_index('model').dropna()
 
+    """
     # Infer with each single model of AG stack ensemble
     print('--------')
     best_model = predictor.get_model_best()
@@ -519,6 +520,7 @@ def main(args: argparse.Namespace):
     exp_result_df.loc[model_name] = [infer_times, speed, test_metric1, test_metric2]
     print(f'{model_name}: {test_metrics} | time: {infer_times}s')
     print('--------')
+    """
 
     """
     # TODO: in progress
@@ -537,6 +539,7 @@ def main(args: argparse.Namespace):
     print('--------')
     """
 
+    """
     # Infer Time for F2SP w/ HPO
     print('--------')
     model_name = 'F2SP/T(RePrt)'
@@ -572,6 +575,7 @@ def main(args: argparse.Namespace):
     exp_result_df.loc[model_name] = [infer_times, speed, test_metric1, test_metric2]
     print(f'{model_name}: cascade_model_seq={cascade_model_seq}, chosen_threshold={chosen_model_name, chosen_threshold}')
     print(f'{model_name}: {test_metrics} | time: {infer_times}s')
+    """
     
     # Infer Time for F2SP w/ HPO MultiParams
     print('--------')
