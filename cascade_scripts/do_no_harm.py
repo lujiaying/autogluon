@@ -179,7 +179,7 @@ def choose_best_threshold_model_by_Rescale_Pareto(model_perf_inftime_df: pd.Data
     return chosen_model
 
 
-def hpo_one_param(predictor: TabularPredictor, leaderboard: pd.DataFrame, metric_name: str,
+def hpo_one_param(predictor: TabularPredictor, metric_name: str,
                   HPO_score_func_name: str = 'Rescale_Pareto',
                   allow_single_model: bool = True, 
                   cascade_model_seq: List[str] = []) -> Tuple[str, float]:
@@ -199,17 +199,13 @@ def hpo_one_param(predictor: TabularPredictor, leaderboard: pd.DataFrame, metric
     if HPO_score_func_name == 'Rescale_Pareto':
         allow_single_model = True   # must allow, since it depends on Pareto Frontier
     # print(f'{cascade_model_seq=}')
+    leaderboard = predictor.leaderboard(silent=True)
 
     # get baseline using full cascade
     model_pred_proba_dict, model_pred_time_marginal_dict, val_data = \
             get_models_pred_proba_on_val(predictor, cascade_model_seq)
-    # print(f'get {model_pred_proba_dict=}, {model_pred_time_marginal_dict=}')
-    # print(f'{last_model=}')
     trainer = predictor._trainer
     problem_type: str = trainer.problem_type   # BINARY or MULTICLASS
-    last_model: str = cascade_model_seq[-1]
-    full_cascade_time = sum(model_pred_time_marginal_dict.values())
-    full_cascade_metric_value = METRIC_FUNC_MAP[metric_name](y_true=val_data[1], y_pred=model_pred_proba_dict[last_model])
     num_classes = trainer.num_classes
     # do grid search
     cascade_perf_inftime_l = []   # model_name, performance, infer_time
@@ -225,6 +221,9 @@ def hpo_one_param(predictor: TabularPredictor, leaderboard: pd.DataFrame, metric
     chosen_model = ''
     if HPO_score_func_name == 'HMean':
         max_HPO_score = 0.0
+        last_model: str = cascade_model_seq[-1]
+        full_cascade_time = sum(model_pred_time_marginal_dict.values())
+        full_cascade_metric_value = METRIC_FUNC_MAP[metric_name](y_true=val_data[1], y_pred=model_pred_proba_dict[last_model])
         # harmonic mean of infer time and val metric
         HPO_score_func = lambda a, b: 2.0 / (1.0/a + 1.0/b)
         for i in range(model_perf_inftime_df.shape[0]):
@@ -498,6 +497,7 @@ def main(args: argparse.Namespace):
         if model_name == best_model:
             print(f'{model_name}: {test_metrics} | time: {infer_times}s')
     print('--------')
+    """
 
     # Infer Time for fast to slow approach F2SP
     print('--------')
@@ -520,7 +520,6 @@ def main(args: argparse.Namespace):
     exp_result_df.loc[model_name] = [infer_times, speed, test_metric1, test_metric2]
     print(f'{model_name}: {test_metrics} | time: {infer_times}s')
     print('--------')
-    """
 
     """
     # TODO: in progress
@@ -545,7 +544,7 @@ def main(args: argparse.Namespace):
     model_name = 'F2SP/T(RePrt)'
     print('F2SP w/ HPO (Rescale_Pareto):')
     cascade_model_seq = get_cascade_model_sequence_by_val_marginal_time(predictor)
-    chosen_model_name, chosen_threshold = hpo_one_param(predictor, leaderboard, eval_metric, 
+    chosen_model_name, chosen_threshold = hpo_one_param(predictor, eval_metric, 
             'Rescale_Pareto', False, cascade_model_seq)
     infer_times = []
     for _ in range(run_xtime):
@@ -575,7 +574,6 @@ def main(args: argparse.Namespace):
     exp_result_df.loc[model_name] = [infer_times, speed, test_metric1, test_metric2]
     print(f'{model_name}: cascade_model_seq={cascade_model_seq}, chosen_threshold={chosen_model_name, chosen_threshold}')
     print(f'{model_name}: {test_metrics} | time: {infer_times}s')
-    """
     
     # Infer Time for F2SP w/ HPO MultiParams
     print('--------')
@@ -615,6 +613,7 @@ def main(args: argparse.Namespace):
     exp_result_df.loc[model_name] = [infer_times, speed, test_metric1, test_metric2]
     print(f'{model_name}: cascade_model_seq={cascade_model_seq}, chosen_threshold={chosen_model_name, chosen_thresholds}')
     print(f'{model_name}: {test_metrics} | time: {infer_times}s')
+    """
 
     # store exp_result_df into disk
     print(exp_result_df.round(ndigits))
