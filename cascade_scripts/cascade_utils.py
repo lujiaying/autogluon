@@ -284,12 +284,15 @@ def rescale_by_pareto_frontier_model(model_df: pd.DataFrame, speed_soft_cap: flo
 # --------------------------------
 
 # Experiments Reulst DataFrame Related Functions
+MAIN_METRIC_COL = -3
+SEC_METRIC_COL = -2
+
 def get_exp_df_meta_columns(problem_type: str) -> List[str]:
     # last two columns are metric names
     if problem_type == BINARY:
-        meta_cols = ['model', 'pred_time_test', 'speed', 'roc_auc', 'accuracy']
+        meta_cols = ['model', 'pred_time_test', 'speed', 'roc_auc', 'accuracy', 'score_val']
     elif problem_type == MULTICLASS:
-        meta_cols = ['model', 'pred_time_test', 'speed', 'accuracy', 'mcc']
+        meta_cols = ['model', 'pred_time_test', 'speed', 'accuracy', 'mcc', 'score_val']
     else:
         raise ValueError(f'Invalid input arg problem_type={problem_type}')
     return meta_cols
