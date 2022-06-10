@@ -231,7 +231,7 @@ def validate_inputs(costs, sense=None):
 MODEL = 'model'
 ERROR = 'error'
 ERROR_NORM = 'error_norm'
-SCORE = 'score'
+SCORE = 'goodness'
 SPEED = 'speed'
 SPEED_ADJUSTED = 'speed_adjusted'
 
@@ -284,15 +284,15 @@ def rescale_by_pareto_frontier_model(model_df: pd.DataFrame, speed_soft_cap: flo
 # --------------------------------
 
 # Experiments Reulst DataFrame Related Functions
-MAIN_METRIC_COL = -3
-SEC_METRIC_COL = -2
+MAIN_METRIC_COL = 3
+SEC_METRIC_COL = 4
 
 def get_exp_df_meta_columns(problem_type: str) -> List[str]:
     # last two columns are metric names
     if problem_type == BINARY:
-        meta_cols = ['model', 'pred_time_test', 'speed', 'roc_auc', 'accuracy', 'score_val']
+        meta_cols = ['model', 'pred_time_test', 'speed', 'roc_auc', 'accuracy', 'pred_time_val', 'score_val', 'goodness']
     elif problem_type == MULTICLASS:
-        meta_cols = ['model', 'pred_time_test', 'speed', 'accuracy', 'mcc', 'score_val']
+        meta_cols = ['model', 'pred_time_test', 'speed', 'accuracy', 'mcc', 'pred_time_val', 'score_val', 'goodness']
     else:
         raise ValueError(f'Invalid input arg problem_type={problem_type}')
     return meta_cols

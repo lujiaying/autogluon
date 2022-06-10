@@ -38,6 +38,7 @@ PROB_MULTICLASS = [0.02542674, 0.02637472, 0.03100157, 0.04546687, 0.06575639,
 PRED_TIME = 'pred_time_val'
 PERFORMANCE = 'score_val'
 PWE_suffix = '_PWECascade'
+COLS_REPrt = [MODEL, PERFORMANCE, PRED_TIME]       # columns for rescale_by_pareto_frontier_model()
 
 
 def image_id_to_path(image_id: Optional[str], image_path: str, image_path_suffix: str = ''
@@ -123,7 +124,7 @@ def simulate_bag_models_pred_proba_margin_time(predictor: TabularPredictor,
     model_pred_time_dict: Dict[str, float] = {}   # margin time
     trainer = predictor._trainer
     as_multiclass: bool = trainer.problem_type == MULTICLASS
-    leaderboard = predictor.leaderboard(silent=True).set_index('model')
+    leaderboard = predictor.leaderboard(silent=True).set_index(MODEL)
     for model_name in cascade_model_seq:
         # TODO: to cover high_quality refit models contains _FULL str
         # now assume each model contains oof_pred_proba
@@ -143,16 +144,28 @@ def simulate_bag_models_pred_proba_margin_time(predictor: TabularPredictor,
     return model_pred_proba_dict, model_pred_time_dict
 
 
+def helper_get_val_data(predictor: TabularPredictor) -> Tuple[Tuple[np.ndarray, np.ndarray], bool]:
+    """
+    For models trained with bagging strategy, 
+    we no longer able to directly get val_data
+    """
+    val_data = predictor.load_data_internal('val')   # Tuple[np.array, np.array] for X, Y
+    is_trained_bagging = False
+    if val_data[0] is None and val_data[1] is None:
+        val_data = predictor.load_data_internal('train')   # oof_pred actually on train_data
+        is_trained_bagging = True
+    return val_data, is_trained_bagging
+
+
 def get_models_pred_proba_on_val(predictor: TabularPredictor, cascade_model_seq: List[str]
         ) -> Tuple[Dict[str, np.ndarray], Dict[str, float], Tuple[np.ndarray, np.ndarray]]:
-    val_data = predictor.load_data_internal('val')   # Tuple[np.array, np.array] for X, Y
     trainer = predictor._trainer
-    if val_data[0] is None and val_data[1] is None:
+    val_data, is_trained_bagging = helper_get_val_data(predictor)
+    if is_trained_bagging is True:
         # This branch covers best-quality presets
         # TODO: to cover refit_full models (high-quality presets)
         model_pred_proba_dict, model_pred_time_marginal_dict = \
                 simulate_bag_models_pred_proba_margin_time(predictor, cascade_model_seq)
-        val_data = predictor.load_data_internal('train')   # oof_pred actually on train_data
     else:
         # models Not use bagging strategy
         # run all models on val data in just one time, keep everything in-record
@@ -162,15 +175,21 @@ def get_models_pred_proba_on_val(predictor: TabularPredictor, cascade_model_seq:
     return model_pred_proba_dict, model_pred_time_marginal_dict, val_data
 
 
-def choose_best_threshold_model_by_Rescale_Pareto(model_perf_inftime_df: pd.DataFrame, val_data: tuple,
-        predictor: TabularPredictor) -> Tuple[str, float, float]:
+def wrap_rescale_by_pareto_frontier_model(model_perf_inftime_df: pd.DataFrame, val_data: tuple,
+        predictor: TabularPredictor, mask_pareto_dominated_models: bool = True) -> pd.DataFrame:
+    """
+    This is a wrapper for rescale_by_pareto_frontier_model()
+    which contains essential presets/hyperparameters
+    """
+    model_perf_inftime_df = model_perf_inftime_df.copy()
     problem_type = predictor._learner.problem_type
     speed_soft_cap = 1000   # rows/second
     weights = (-1.0, 0.01)
     # get speed in terms of X rows/second
     model_perf_inftime_df[SPEED] = val_data[0].shape[0] / model_perf_inftime_df[PRED_TIME] 
-    pareto_mask = paretoset(model_perf_inftime_df[[PERFORMANCE, SPEED]], sense=['max', 'max'])
-    model_perf_inftime_df = model_perf_inftime_df[pareto_mask].copy()
+    if mask_pareto_dominated_models:
+        pareto_mask = paretoset(model_perf_inftime_df[[PERFORMANCE, SPEED]], sense=['max', 'max'])
+        model_perf_inftime_df = model_perf_inftime_df[pareto_mask].copy()
     # currently only ocnsider ACC and ROC_AUC
     model_perf_inftime_df[ERROR] = 1.0 - model_perf_inftime_df[PERFORMANCE]
     # set up random guess baseline performance
@@ -184,10 +203,16 @@ def choose_best_threshold_model_by_Rescale_Pareto(model_perf_inftime_df: pd.Data
     model_perf_inftime_df = rescale_by_pareto_frontier_model(model_perf_inftime_df, 
             speed_soft_cap=speed_soft_cap, weights=weights,
             metric_name=predictor.eval_metric.name, random_guess_perf=random_guess_perf)
+    return model_perf_inftime_df
+
+
+def choose_best_threshold_model_by_Rescale_Pareto(model_perf_inftime_df: pd.DataFrame, val_data: tuple,
+        predictor: TabularPredictor) -> Tuple[str, float, float]:
+    model_perf_inftime_df = wrap_rescale_by_pareto_frontier_model(model_perf_inftime_df, val_data, predictor)
     model_perf_inftime_df = model_perf_inftime_df.sort_values(by=SCORE, ascending=False)
     chosen_row = model_perf_inftime_df.iloc[0]
     chosen_model = chosen_row.name   # 'cascade-0.7_0.8_0.9'
-    return chosen_model, chosen_row.loc[SPEED], chosen_row.loc[PERFORMANCE]
+    return chosen_model, chosen_row.loc[PRED_TIME], chosen_row.loc[PERFORMANCE]
 
 
 def hpo_one_param(predictor: TabularPredictor, metric_name: str,
@@ -250,7 +275,7 @@ def hpo_one_param(predictor: TabularPredictor, metric_name: str,
                 chosen_model = row.name
         raise ValueError('Should not enter this branch in hpo_one_param()')
     elif HPO_score_func_name == 'Rescale_Pareto':
-        chosen_model, speed_val, score_val = choose_best_threshold_model_by_Rescale_Pareto(model_perf_inftime_df, val_data, predictor)
+        chosen_model, time_val, score_val = choose_best_threshold_model_by_Rescale_Pareto(model_perf_inftime_df, val_data, predictor)
     else:
         raise ValueError(f"Invalid Input Arg {HPO_score_func_name=} for hpo_one_param()")
     # print(f'{chosen_model=}, {max_HPO_score}')
@@ -260,7 +285,7 @@ def hpo_one_param(predictor: TabularPredictor, metric_name: str,
     else:
         chosen_model_name = chosen_model
         chosen_threshold = None
-    return chosen_model_name, chosen_threshold, speed_val, score_val
+    return chosen_model_name, chosen_threshold, time_val, score_val
 
 
 def hpo_multi_params_random_search(predictor: TabularPredictor, metric_name: str, 
@@ -305,11 +330,12 @@ def hpo_multi_params_random_search(predictor: TabularPredictor, metric_name: str
                 problem_type, num_classes, cascade_model_seq, model_pred_proba_dict, model_pred_time_marginal_dict, predictor)
         thresholds_str = cas_delim.join(map(str, thresholds))
         cascade_perf_inftime_l.append([f'{cas_starting_str}{model_delim}{thresholds_str}', metric_value, infer_time])
-    columns = [MODEL, PERFORMANCE, PRED_TIME]
+    global COLS_REPrt
+    columns = COLS_REPrt
     cascade_perf_inftime_l = pd.DataFrame(cascade_perf_inftime_l, columns=columns)
     model_perf_inftime_df = pd.concat([leaderboard[columns], cascade_perf_inftime_l]).set_index(MODEL)
     if HPO_score_func_name == 'Rescale_Pareto':
-        chosen_model, speed_val, score_val = choose_best_threshold_model_by_Rescale_Pareto(model_perf_inftime_df, val_data, predictor)
+        chosen_model, time_val, score_val = choose_best_threshold_model_by_Rescale_Pareto(model_perf_inftime_df, val_data, predictor)
     else:
         raise ValueError(f'hpo_multi_params_random_search() not support arg HPO_score_func_name={HPO_score_func_name}')
     if chosen_model.startswith(cas_starting_str):
@@ -319,7 +345,7 @@ def hpo_multi_params_random_search(predictor: TabularPredictor, metric_name: str
     else:
         chosen_model_name = chosen_model
         chosen_threshold = None
-    return chosen_model_name, chosen_threshold, speed_val, score_val
+    return chosen_model_name, chosen_threshold, time_val, score_val
 
 
 def get_or_build_partial_weighted_ensemble(predictor: TabularPredictor, base_models: List[str]) -> str:
@@ -427,13 +453,14 @@ def get_cascade_model_sequence_by_val_marginal_time(predictor: TabularPredictor,
 def append_approach_exp_result_to_df(exp_result_df: pd.DataFrame, model_name: str, 
         predictor: TabularPredictor, infer_times: float, pred_proba: np.ndarray, 
         test_data: pd.DataFrame, label: str, 
-        score_val: Optional[float]) -> Dict[str, float]:
+        time_val: Optional[float], score_val: Optional[float]) -> Dict[str, float]:
     meta_cols = get_exp_df_meta_columns(predictor._learner.problem_type)
     speed = test_data.shape[0] / infer_times
     test_metrics = predictor.evaluate_predictions(y_true=test_data[label], y_pred=pred_proba, silent=True)
     test_metric1 = test_metrics[meta_cols[MAIN_METRIC_COL]]
     test_metric2 = test_metrics[meta_cols[SEC_METRIC_COL]]
-    exp_result_df.loc[model_name] = [infer_times, speed, test_metric1, test_metric2, score_val]
+    # the last column is `goodness`, which can only be calculate after getting all models
+    exp_result_df.loc[model_name] = [infer_times, speed, test_metric1, test_metric2, time_val, score_val, None]
     return test_metrics
 
 
@@ -445,8 +472,9 @@ def main(args: argparse.Namespace):
     run_xtime = args.run_xtime
     exp_result_save_path = args.exp_result_save_path
     presets = args.predictor_presets
-    ndigits = 4
     hpo_search_n_trials = args.HPO_random_search_trials
+    time_limit = args.time_limit
+    ndigits = 4
    
     path_val = ''    # by default, dataset not contain validation set
     # Cover Type MultiClass
@@ -507,6 +535,7 @@ def main(args: argparse.Namespace):
         tuning_data=val_data,
         hyperparameters=model_hyperparameters,
         presets=presets,
+        time_limit=time_limit,
     )
     if do_multimodal:
         # currently support PetFinder or CPP
@@ -548,15 +577,16 @@ def main(args: argparse.Namespace):
     if os.path.exists(exp_result_save_path):
         exp_result_df = pd.read_csv(exp_result_save_path, index_col='model')
     else:
-        exp_result_df = pd.DataFrame(columns=meta_cols).set_index('model').dropna()
+        exp_result_df = pd.DataFrame(columns=meta_cols).set_index(MODEL).dropna()
 
+    """
     # Infer with each single model of AG stack ensemble
     print('--------')
     best_model = predictor.get_model_best()
     best_model_members = predictor._trainer.get_minimum_model_set(best_model, include_self=False)
     print(f'AG0.4 with best_model={best_model}--{best_model_members}:')
     leaderboard = predictor.leaderboard(silent=True)
-    for model_name, can_infer, score_val in zip(leaderboard['model'], leaderboard['can_infer'], leaderboard['score_val']):
+    for model_name, can_infer, time_val, score_val in zip(leaderboard['model'], leaderboard['can_infer'], leaderboard['pred_time_val'], leaderboard['score_val']):
         if model_name.endswith('_Cascade'):
             continue
         if not can_infer:
@@ -568,70 +598,49 @@ def main(args: argparse.Namespace):
             te = time.time()
             infer_times.append(te-ts)
         infer_times = sum(infer_times) / len(infer_times)
-        test_metrics = append_approach_exp_result_to_df(exp_result_df, model_name, predictor, infer_times, pred_proba, test_data, label, score_val)
+        test_metrics = append_approach_exp_result_to_df(exp_result_df, model_name, predictor, infer_times, pred_proba, test_data, label, time_val, score_val)
         if model_name == best_model:
             print(f'AG0.4 best_model {model_name}: {test_metrics} | time: {infer_times}s')
     print('--------')
 
-    # Infer Time for fast to slow approach F2SP
-    print('--------')
-    model_name = 'F2SP'
-    # Step1: get the model sequence by val inference
-    cascade_model_seq = get_cascade_model_sequence_by_val_marginal_time(predictor)
-    print(f'{model_name}: cascade_model_seq={cascade_model_seq}, default_threshol=0.9')
-    # Step2: stop can be done after each model
-    infer_times = []
-    for _ in range(run_xtime):
+    # Infer Time for fast to slow approach F2SP, or F2SP++
+    model_names = ['F2SP', 'F2SP++']   # change this for execution
+    for model_name in model_names:
+        print('--------')
+        # Set up configs
+        if model_name in ['F2SP++']:
+            build_pwe_flag = True
+        else:
+            build_pwe_flag = False
+        # Step1: get the model sequence by val inference
+        cascade_model_seq = get_cascade_model_sequence_by_val_marginal_time(predictor, build_pwe_flag=build_pwe_flag)
+        print(f'{model_name}: cascade_model_seq={cascade_model_seq}, default_threshol=0.9')
+        # Step2: stop can be done after each model
+        infer_times = []
+        for _ in range(run_xtime):
+            ts = time.time()
+            pred_proba = predictor.predict_proba(test_data, model=cascade_model_seq)
+            te = time.time()
+            infer_times.append(te-ts)
+        infer_times = sum(infer_times) / len(infer_times)
+        # add val_score
+        val_data, _ = helper_get_val_data(predictor)
         ts = time.time()
-        pred_proba = predictor.predict_proba(test_data, model=cascade_model_seq)
-        te = time.time()
-        infer_times.append(te-ts)
-    infer_times = sum(infer_times) / len(infer_times)
-    # add val_score
-    val_data = predictor.load_data_internal('val')
-    if val_data[0] is None and val_data[1] is None:
-        val_score = None
-    else:
         val_pred_proba = predictor.predict_proba(val_data[0], model=cascade_model_seq)
+        te = time.time()
+        time_val = te - ts
         val_labels = predictor.transform_labels(val_data[1], inverse=True)
         val_metrics = predictor.evaluate_predictions(y_true=val_labels, y_pred=val_pred_proba, silent=True)
-        print(f'{val_metrics=}, {meta_cols[MAIN_METRIC_COL]=}')
-        val_score = val_metrics[meta_cols[MAIN_METRIC_COL]]
-    test_metrics = append_approach_exp_result_to_df(exp_result_df, model_name, predictor, infer_times, pred_proba, test_data, label, val_score)
-    print(f'{model_name}: {test_metrics} | time: {infer_times}s')
-    print('--------')
+        score_val = val_metrics[meta_cols[MAIN_METRIC_COL]]
+        test_metrics = append_approach_exp_result_to_df(exp_result_df, model_name, predictor, infer_times, pred_proba, test_data, label, time_val, score_val)
+        print(f'{model_name}: {test_metrics} | time: {infer_times}s')
+        print('--------')
+    """
 
-    # Infer Time for fast to slow approach F2SP++
-    print('--------')
-    model_name = 'F2SP++'
-    # Step1: get the model sequence by val inference
-    cascade_model_seq = get_cascade_model_sequence_by_val_marginal_time(predictor, build_pwe_flag=True)
-    print(f'{model_name}: cascade_model_seq={cascade_model_seq}, default_threshol=0.9')
-    # Step2: stop can be done after each model
-    infer_times = []
-    for _ in range(run_xtime):
-        ts = time.time()
-        pred_proba = predictor.predict_proba(test_data, model=cascade_model_seq)
-        te = time.time()
-        infer_times.append(te-ts)
-    infer_times = sum(infer_times) / len(infer_times)
-    # add val_score
-    val_data = predictor.load_data_internal('val')
-    if val_data[0] is None and val_data[1] is None:
-        val_score = None
-    else:
-        val_pred_proba = predictor.predict_proba(val_data[0], model=cascade_model_seq)
-        val_labels = predictor.transform_labels(val_data[1], inverse=True)
-        val_metrics = predictor.evaluate_predictions(y_true=val_labels, y_pred=val_pred_proba, silent=True)
-        val_score = val_metrics[meta_cols[MAIN_METRIC_COL]]
-        print(f'{val_metrics=}, {meta_cols[MAIN_METRIC_COL]=}')
-    test_metrics = append_approach_exp_result_to_df(exp_result_df, model_name, predictor, infer_times, pred_proba, test_data, label, val_score)
-    print(f'{model_name}: {test_metrics} | time: {infer_times}s')
-    clean_partial_weighted_ensembles(predictor)
-    print('--------')
-
-    # model_names = ['F2SP/T(RePrt)', 'F2SP/TM(RePrt)', 'F2SP++/T(RePrt)', 'F2SP++/TM(RePrt)']   # change this for execution
-    model_names = ['F2SP/T(RePrt)', 'F2SP/TM(RePrt)', 'F2SP++/T(RePrt)', 'F2SP++/TM(RePrt)']   # change this for execution
+    # change this for execution
+    # model_names = ['F2SP/T(RePrt)', 'F2SP/TM(RePrt)', 'F2SP++/T(RePrt)', 'F2SP++/TM(RePrt)', 
+    #                'F2S/T(RePrt)', 'F2S/TM(RePrt)', 'F2S++/T(RePrt)', 'F2S++/TM(RePrt)']   
+    model_names = ['F2S/T(RePrt)', 'F2S/TM(RePrt)', 'F2S++/T(RePrt)', 'F2S++/TM(RePrt)']   
     for model_name in model_names:
         print('--------')
         # Set up configs
@@ -639,13 +648,17 @@ def main(args: argparse.Namespace):
             build_pwe_flag = True
         else:
             build_pwe_flag = False
+        if model_name.startswith('F2SP'):
+            better_than_prev = True
+        else:
+            better_than_prev = False
         # Step 1: prepare cascade
-        cascade_model_seq = get_cascade_model_sequence_by_val_marginal_time(predictor, build_pwe_flag=build_pwe_flag)
-        if model_name in ['F2SP/T(RePrt)', 'F2SP++/T(RePrt)']:
-            chosen_model_name, chosen_threshold, speed_val, score_val = hpo_one_param(predictor, eval_metric, 
+        cascade_model_seq = get_cascade_model_sequence_by_val_marginal_time(predictor, better_than_prev=better_than_prev, build_pwe_flag=build_pwe_flag)
+        if model_name in ['F2SP/T(RePrt)', 'F2SP++/T(RePrt)', 'F2S/T(RePrt)', 'F2S++/T(RePrt)']:
+            chosen_model_name, chosen_threshold, time_val, score_val = hpo_one_param(predictor, eval_metric, 
                     'Rescale_Pareto', False, cascade_model_seq)
         else:
-            chosen_model_name, chosen_threshold, speed_val, score_val \
+            chosen_model_name, chosen_threshold, time_val, score_val \
                     = hpo_multi_params_random_search(predictor, eval_metric, cascade_model_seq, num_trails=hpo_search_n_trials)
         # Step 2: do inference
         infer_times = []
@@ -669,14 +682,20 @@ def main(args: argparse.Namespace):
                 te = time.time()
             infer_times.append(te-ts)
         infer_times = sum(infer_times) / len(infer_times)
-        test_metrics = append_approach_exp_result_to_df(exp_result_df, model_name, predictor, infer_times, pred_proba, test_data, label, score_val)
+        test_metrics = append_approach_exp_result_to_df(exp_result_df, model_name, predictor, infer_times, pred_proba, test_data, label, time_val, score_val)
         print(f'{model_name}: cascade_model_seq={cascade_model_seq}, chosen_threshold={chosen_model_name, chosen_threshold}')
-        print(f'{model_name}: score_val={score_val}, speed_val={speed_val}')
+        print(f'{model_name}: score_val={score_val}, time_val={time_val}')
         print(f'{model_name}: {test_metrics} | time: {infer_times}s')
         clean_partial_weighted_ensembles(predictor)
 
     # store exp_result_df into disk
-    print(exp_result_df.round(ndigits))
+    # add goodness score col after collecting all model results
+    global COLS_REPrt
+    model_val_perf_inftime_df = exp_result_df[COLS_REPrt[1:]]
+    val_data, _ = helper_get_val_data(predictor)
+    model_val_perf_inftime_df = wrap_rescale_by_pareto_frontier_model(model_val_perf_inftime_df, val_data, predictor, mask_pareto_dominated_models=False)
+    exp_result_df.update(model_val_perf_inftime_df[[SCORE]])
+    print(exp_result_df.round(ndigits).reset_index())
     exp_result_save_dir = os.path.dirname(exp_result_save_path)
     if not os.path.exists(exp_result_save_dir):
         os.makedirs(exp_result_save_dir)
@@ -693,6 +712,7 @@ if __name__ == '__main__':
     parser.add_argument('--run_xtime', type=int, default=3, help="Run X times of each approach to get stable infer time.")
     parser.add_argument('--predictor_presets', type=str, default='medium_quality')
     parser.add_argument('--HPO_random_search_trials', type=int, default=3000)
+    parser.add_argument('--time_limit', type=int, default=None, help='Training time limit in seconds')
     args = parser.parse_args()
     print(f'Exp arguments: {args}')
 
