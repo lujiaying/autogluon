@@ -262,8 +262,8 @@ def apply_extra_penalty_on_error(model_errors: pd.Series, metric_name: str,
             random_guess_perf = 0.5
         else:
             raise ValueError(f'apply_extra_penalty_on_error() not support {metric_name=}')
-    model_errors /= random_guess_perf
-    extra_penalty = constant / (model_errors.clip(lower=1.0) - model_errors) - constant
+    model_penalty = model_errors / random_guess_perf
+    extra_penalty = constant / (model_penalty.clip(lower=1.0) - model_penalty) - constant
     return extra_penalty
 
 def rescale_by_pareto_frontier_model(model_df: pd.DataFrame, speed_soft_cap: float,
@@ -272,7 +272,7 @@ def rescale_by_pareto_frontier_model(model_df: pd.DataFrame, speed_soft_cap: flo
     model_df = copy.deepcopy(model_df)
     model_df[ERROR_NORM] = (model_df[ERROR] - model_df[ERROR].min()) / model_df[ERROR].min()
     model_df[ERROR_NORM] = model_df[ERROR_NORM].fillna(0.0)
-    model_df[ERROR_NORM] += apply_extra_penalty_on_error(model_df[ERROR], metric_name, random_guess_perf)
+    model_df[ERROR_NORM] += apply_extra_penalty_on_error(model_df[ERROR].copy(), metric_name, random_guess_perf)
     model_df[SPEED_ADJUSTED] = [adjust_speed(v, soft_cap=speed_soft_cap) for v in model_df[SPEED].values]
     model_df[SPEED_ADJUSTED] = model_df[SPEED_ADJUSTED] / model_df[SPEED_ADJUSTED].min() - 1
 
