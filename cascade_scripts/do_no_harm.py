@@ -5,10 +5,11 @@ Author: Jiaying Lu
 
 import os
 import time
-from typing import List, Tuple, Dict, Optional, Union, Set
+from typing import List, Tuple, Dict, Optional, Union, Set, Any
 from functools import partial
 import itertools
 import argparse
+
 
 # from sklearnex import patch_sklearn
 # patch_sklearn()   # This cause bug!!!
@@ -27,11 +28,11 @@ from .cascade_utils import SPEED, ERROR, MODEL, SCORE
 from .cascade_utils import get_exp_df_meta_columns, MAIN_METRIC_COL, SEC_METRIC_COL
 
 METRIC_FUNC_MAP = {'accuracy': accuracy, 'acc': accuracy, 'roc_auc': roc_auc}
-THRESHOLDS_BINARY = [0.5, 0.6, 0.7, 0.8, 0.85, 0.9, 0.925, 0.95, 0.975, 0.999]
+THRESHOLDS_BINARY = [0.5, 0.6, 0.7, 0.8, 0.85, 0.9, 0.925, 0.95, 0.975, 1.0]
 # generate from softmax(norm.pdf(thresholds, loc=0.9, scale=0.25)
 PROB_BINARY = [0.03932009, 0.05486066, 0.08038427, 0.1100718 , 0.12056911, 0.12443972, 0.12345325, 0.12056911, 0.11600155, 0.11033044]
 # generate from softmax(norm.pdf(thresholds, loc=0.75, scale=0.25)
-THRESHOLDS_MULTICLASS = [0.0, 0.1, 0.25, 0.4, 0.5, 0.6, 0.7, 0.75, 0.8, 0.85, 0.9, 0.95, 0.999]
+THRESHOLDS_MULTICLASS = [0.0, 0.1, 0.25, 0.4, 0.5, 0.6, 0.7, 0.75, 0.8, 0.85, 0.9, 0.95, 1.0]
 PROB_MULTICLASS = [0.02542674, 0.02637472, 0.03100157, 0.04546687, 0.06575639,
        0.09472447, 0.11937201, 0.1232042 , 0.11937201, 0.10897893,
        0.09472447, 0.07958616, 0.06601146]
@@ -69,10 +70,13 @@ def get_cascade_metric_and_time_by_threshold(val_data: Tuple[np.ndarray, np.ndar
     global METRIC_FUNC_MAP
     if isinstance(cascade_thresholds, float):
         cascade_thresholds = [cascade_thresholds for _ in range(len(cascade_model_seq)-1)]
+    elif isinstance(cascade_thresholds, tuple):
+        cascade_thresholds = list(cascade_thresholds)
+    elif isinstance(cascade_thresholds, np.ndarray):
+        cascade_thresholds = cascade_thresholds.tolist()
     # add a dummy threshold for last model in cascade_model_seq
     assert len(cascade_thresholds) == len(cascade_model_seq) - 1
-    if isinstance(cascade_thresholds, tuple):
-        cascade_thresholds = list(cascade_thresholds)
+    cascade_thresholds: list = cascade_thresholds.copy()
     cascade_thresholds.append(None)
     X, Y = val_data[0], val_data[1]
     num_rows = Y.shape[0]
@@ -176,7 +180,7 @@ def get_models_pred_proba_on_val(predictor: TabularPredictor, cascade_model_seq:
 
 
 def wrap_rescale_by_pareto_frontier_model(model_perf_inftime_df: pd.DataFrame, val_data: tuple,
-        predictor: TabularPredictor, mask_pareto_dominated_models: bool = True) -> pd.DataFrame:
+        predictor: TabularPredictor, mask_pareto_dominated_models: bool = False) -> pd.DataFrame:
     """
     This is a wrapper for rescale_by_pareto_frontier_model()
     which contains essential presets/hyperparameters
@@ -189,7 +193,7 @@ def wrap_rescale_by_pareto_frontier_model(model_perf_inftime_df: pd.DataFrame, v
     model_perf_inftime_df[SPEED] = val_data[0].shape[0] / model_perf_inftime_df[PRED_TIME] 
     if mask_pareto_dominated_models:
         pareto_mask = paretoset(model_perf_inftime_df[[PERFORMANCE, SPEED]], sense=['max', 'max'])
-        model_perf_inftime_df = model_perf_inftime_df[pareto_mask].copy()
+        model_perf_inftime_df = model_perf_inftime_df[pareto_mask]
     # currently only ocnsider ACC and ROC_AUC
     model_perf_inftime_df[ERROR] = 1.0 - model_perf_inftime_df[PERFORMANCE]
     # set up random guess baseline performance
@@ -346,6 +350,131 @@ def hpo_multi_params_random_search(predictor: TabularPredictor, metric_name: str
         chosen_model_name = chosen_model
         chosen_threshold = None
     return chosen_model_name, chosen_threshold, time_val, score_val
+
+
+def hpo_multi_params_TPE(predictor: TabularPredictor, metric_name: str, 
+        cascade_model_seq: List[str],
+        HPO_score_func_name: str = 'Rescale_Pareto',
+        num_trails: int = 500,
+        ) -> Tuple[str, Optional[List[float]], float, float]:
+    """
+    Use TPE for HP
+    Currently use hyperopt implementation
+    """
+    def _wrapper_obj_fn(model_perf_inftime_df: pd.DataFrame,
+            val_data: Tuple[np.ndarray, np.ndarray], metric_name: str,
+            problem_type: str, num_classes: int,
+            cascade_model_seq: List[str],
+            model_pred_proba_dict: Dict[str, np.ndarray],
+            model_pred_time_dict: Dict[str, float],
+            predictor: TabularPredictor,
+            hyparams: Dict[str, Any],
+            ) -> float:
+        """
+        Returns a loss that we want to minimize
+        """
+        # cas_ts_try: Dict[int, float],
+        cas_ts_try = hyparams['thresholds']
+        cas_ts_try_list = [0.0 for _ in range(len(cas_ts_try))]
+        for idx, ts in cas_ts_try.items():
+            cas_ts_try_list[idx] = ts
+        metric_value, infer_time = get_cascade_metric_and_time_by_threshold(val_data, metric_name, cas_ts_try_list,
+                problem_type, num_classes, cascade_model_seq, model_pred_proba_dict, model_pred_time_dict, predictor)
+        cascade_try_name = 'CascadeThreshold_trial'
+        model_perf_inftime_df = model_perf_inftime_df.copy()
+        model_perf_inftime_df.loc[cascade_try_name] = [metric_value, infer_time]
+        model_perf_inftime_df = wrap_rescale_by_pareto_frontier_model(model_perf_inftime_df, val_data, predictor)
+        goodness_score = model_perf_inftime_df.loc[cascade_try_name][SCORE]
+        return -goodness_score
+
+    from hyperopt import fmin, tpe, hp
+    if HPO_score_func_name != 'Rescale_Pareto':
+        raise ValueError('Currently hpo_multi_params_TPE() only support "Rescale_Pareto" as goodness function')
+    cascade_len = len(cascade_model_seq)
+    problem_type = predictor._learner.problem_type
+    leaderboard = predictor.leaderboard(silent=True)
+    num_classes = predictor._trainer.num_classes
+    if problem_type == BINARY:
+        ts_min = 0.5
+        ts_min_mild = 0.75
+        ts_max = 1.0
+    elif problem_type == MULTICLASS:
+        ts_min = 0.0
+        ts_min_mild = 0.33
+        ts_max = 1.0
+    else:
+        raise ValueError(f'Not support problem_type={problem_type}')
+
+    # Get val pred proba
+    cascade_model_all_predecessors = get_all_predecessor_model_names(predictor, cascade_model_seq, include_self=True)
+    model_pred_proba_dict, model_pred_time_marginal_dict, val_data = \
+            get_models_pred_proba_on_val(predictor, list(cascade_model_all_predecessors))
+    global COLS_REPrt
+    model_perf_inftime_df = leaderboard[COLS_REPrt].copy().set_index(MODEL)
+    # start the HPO
+    object_func = partial(_wrapper_obj_fn, model_perf_inftime_df, val_data, metric_name, problem_type, num_classes, 
+            cascade_model_seq, model_pred_proba_dict, model_pred_time_marginal_dict, predictor)
+    search_space = hp.choice('cascade_thresholds', [
+        {
+            'mode': 'wild',
+            'thresholds': {i: hp.uniform(f'wild_t_{i}', ts_min, ts_max) for i in range(cascade_len-1)},
+        },
+        {
+            'mode': 'mild',
+            'thresholds': {i: hp.uniform(f'mild_t_{i}', ts_min_mild, ts_max) for i in range(cascade_len-1)},
+        },
+    ])
+    best = fmin(object_func,
+        space=search_space,
+        algo=tpe.suggest,
+        max_evals=num_trails)
+    best_thresholds = [0.0 for _ in range(cascade_len-1)]
+    for k, v in best.items():
+        if k == 'cascade_thresholds':
+            continue
+        idx = int(k.split('_')[-1])
+        best_thresholds[idx] = v
+    score_val, time_val = get_cascade_metric_and_time_by_threshold(val_data, metric_name, best_thresholds,
+            problem_type, num_classes, cascade_model_seq, model_pred_proba_dict, model_pred_time_marginal_dict, predictor)
+    model_perf_inftime_df.loc['cascade'] = [score_val, time_val]
+    chosen_model, time_val, score_val = choose_best_threshold_model_by_Rescale_Pareto(model_perf_inftime_df, val_data, predictor)
+    if chosen_model != 'cascade':
+        chosen_thresholds = None
+    else:
+        chosen_thresholds = best_thresholds
+    print(f'[DEBUG] TPE got best_thresholds={best_thresholds}, end up using it={chosen_thresholds is not None}')
+    """
+    cas_ts = np.array([0.9 for _ in range(cascade_len-1)])
+    mname_cas_ts_dict = {}
+    # TODO: change to simple evolution strategy because NES is unbounded.
+    for i in range(num_trails):
+        N = np.random.rand(npop, cascade_len-1)   # samples from a normal distribution N(0,1)
+        pop_mnames = []
+        model_perf_inftime_df = model_perf_inftime_df[COLS_REPrt[1:]]
+        for j in range(npop):
+            cas_ts_try = np.clip(cas_ts + noise_std * N[j], a_min=ts_min, a_max=ts_max)
+            metric_value, infer_time = get_cascade_metric_and_time_by_threshold(val_data, metric_name, cas_ts_try,
+                    problem_type, num_classes, cascade_model_seq, model_pred_proba_dict, model_pred_time_marginal_dict, predictor)
+            model_name = f'{cas_starting_str}{model_delim}{i}{model_delim}{j}'
+            pop_mnames.append(model_name)
+            mname_cas_ts_dict[model_name] = cas_ts_try
+            model_perf_inftime_df.loc[model_name] = [metric_value, infer_time]
+        model_perf_inftime_df = wrap_rescale_by_pareto_frontier_model(model_perf_inftime_df, val_data, predictor)
+        rewards = model_perf_inftime_df.loc[pop_mnames][SCORE].to_numpy()    # (npop,)
+        if i % 50 == 0:
+            print(f'iter#{i}. {cas_ts=}, rewards={rewards.mean()}')
+        # rewards = (rewards - np.mean(rewards)) / np.std(rewards)   # standardize the rewards
+        # perform the parameter update.
+        cas_ts = cas_ts + lr/(npop*noise_std) * np.dot(N.T, rewards)
+        # remove pareto dominated solutions to save space
+        pareto_mask = paretoset(model_perf_inftime_df[[PERFORMANCE, SPEED]], sense=['max', 'max'])
+        model_perf_inftime_df = model_perf_inftime_df[pareto_mask]
+    # the best model/cascade thresholds after NES HPO
+    print(model_perf_inftime_df.sort_values(by=SCORE, ascending=False))
+    exit(0)
+    """
+    return chosen_model, chosen_thresholds, time_val, score_val
+
 
 
 def get_or_build_partial_weighted_ensemble(predictor: TabularPredictor, base_models: List[str]) -> str:
@@ -640,7 +769,7 @@ def main(args: argparse.Namespace):
     # change this for execution
     # model_names = ['F2SP/T(RePrt)', 'F2SP/TM(RePrt)', 'F2SP++/T(RePrt)', 'F2SP++/TM(RePrt)', 
     #                'F2S/T(RePrt)', 'F2S/TM(RePrt)', 'F2S++/T(RePrt)', 'F2S++/TM(RePrt)']   
-    model_names = ['F2S/T(RePrt)', 'F2S/TM(RePrt)', 'F2S++/T(RePrt)', 'F2S++/TM(RePrt)']   
+    model_names = ['F2S/TM(RePrt)', 'F2S++/TM(RePrt)']   
     for model_name in model_names:
         print('--------')
         # Set up configs
@@ -658,8 +787,10 @@ def main(args: argparse.Namespace):
             chosen_model_name, chosen_threshold, time_val, score_val = hpo_one_param(predictor, eval_metric, 
                     'Rescale_Pareto', False, cascade_model_seq)
         else:
+            # chosen_model_name, chosen_threshold, time_val, score_val \
+            #         = hpo_multi_params_random_search(predictor, eval_metric, cascade_model_seq, num_trails=hpo_search_n_trials)
             chosen_model_name, chosen_threshold, time_val, score_val \
-                    = hpo_multi_params_random_search(predictor, eval_metric, cascade_model_seq, num_trails=hpo_search_n_trials)
+                    = hpo_multi_params_TPE(predictor, eval_metric, cascade_model_seq, num_trails=hpo_search_n_trials)
         # Step 2: do inference
         infer_times = []
         for _ in range(run_xtime):
