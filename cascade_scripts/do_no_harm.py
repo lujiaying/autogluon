@@ -19,10 +19,10 @@ from autogluon.tabular import TabularPredictor, TabularDataset, FeatureMetadata
 from autogluon.core.constants import BINARY, MULTICLASS
 from autogluon.core.metrics import accuracy, roc_auc
 from autogluon.core.data.label_cleaner import LabelCleanerMulticlassToBinary
-from autogluon.core.utils import generate_train_test_split
 from autogluon.tabular.configs.hyperparameter_configs import get_hyperparameter_config
 import tqdm
 
+from .cascade_utils import load_dataset
 from .cascade_utils import paretoset, rescale_by_pareto_frontier_model
 from .cascade_utils import SPEED, ERROR, MODEL, SCORE
 from .cascade_utils import get_exp_df_meta_columns, MAIN_METRIC_COL, SEC_METRIC_COL
@@ -491,7 +491,6 @@ def get_or_build_partial_weighted_ensemble(predictor: TabularPredictor, base_mod
             return successor
     # reach here means no weighted ensemble for current base_models
     successor = predictor.fit_weighted_ensemble(base_models, name_suffix=name_suffix)[0]
-    predictor.persist_models('all', max_memory=0.75)
     print(f'Fit pwe={successor} for {base_models}')
     return successor
 
@@ -575,6 +574,7 @@ def get_cascade_model_sequence_by_val_marginal_time(predictor: TabularPredictor,
             partial_we_model = get_or_build_partial_weighted_ensemble(predictor, partial_model_seq) 
             model_sequence[i] = partial_we_model
         # predictor.leaderboard()
+        predictor.persist_models('all', max_memory=0.75)
         print(f'after build_pwe, {model_sequence=}')
     return model_sequence
 
@@ -598,239 +598,166 @@ def main(args: argparse.Namespace):
     model_save_path = args.model_save_path
     do_multimodal = args.do_multimodal
     force_training = args.force_training
-    run_xtime = args.run_xtime
     exp_result_save_path = args.exp_result_save_path
     presets = args.predictor_presets
     hpo_search_n_trials = args.HPO_random_search_trials
     time_limit = args.time_limit
     ndigits = 4
-   
-    path_val = ''    # by default, dataset not contain validation set
-    # Cover Type MultiClass
-    if dataset_name == 'CoverTypeMulti':
-        path_prefix = 'https://autogluon.s3.amazonaws.com/datasets/CoverTypeMulticlassClassification/'
-        label = 'Cover_Type'
-        path_train = path_prefix + 'train_data.csv'
-        path_test = path_prefix + 'test_data.csv'
-        eval_metric = 'accuracy'
-        model_hyperparameters = 'default'
-    # Adult Income Dataset
-    elif dataset_name == 'Inc':
-        path_prefix = 'https://autogluon.s3.amazonaws.com/datasets/Inc/'
-        label = 'class'
-        path_train = path_prefix + 'train.csv'
-        path_test = path_prefix + 'test.csv'
-        eval_metric = 'roc_auc'
-        model_hyperparameters = 'default'
-    # PetFinder
-    elif dataset_name == 'PetFinder':
-        path_prefix = 'datasets/petfinder_processed/'
-        label = 'AdoptionSpeed'
-        image_col = "Images"
-        path_train = path_prefix + 'train.csv'
-        # We have to use dev, instead of test,
-        # since test.csv NOT release labels
-        path_test = path_prefix + 'dev.csv'
-        eval_metric = 'acc'
-        model_hyperparameters = 'default'
-    # CPP one session
-    elif dataset_name == 'CPP-6aa99d1a':
-        path_prefix = 'datasets/cpp_research_corpora/2021_60datasets/6aa99d1a-1d4b-4d30-bd8b-a26f259b6482/'
-        label = 'label'
-        image_col = 'image_id'
-        path_train = path_prefix + 'train/part-00001-31cb8e7f-4de7-4c5a-8068-d734df5cc6c7.c000.snappy.parquet'
-        path_test = path_prefix + 'test/part-00001-31cb8e7f-4de7-4c5a-8068-d734df5cc6c7.c000.snappy.parquet'
-        eval_metric = 'roc_auc'
-        model_hyperparameters = 'default'
-    # CPP on session
-    elif dataset_name == 'CPP-3564a7a7':
-        path_prefix = 'datasets/cpp_research_corpora/2021_60datasets/3564a7a7-0e7c-470f-8f9e-5a029be8e616/'
-        label = 'label'
-        image_col = 'image_id'
-        path_train = path_prefix + 'train/part-00001-9c4bc314-0803-4d61-a7c2-6f74f9c9ccfd.c000.snappy.parquet'
-        path_test = path_prefix + 'test/part-00001-9c4bc314-0803-4d61-a7c2-6f74f9c9ccfd.c000.snappy.parquet'
-        eval_metric = 'roc_auc'
-        model_hyperparameters = 'default'
-    else:
-        print(f'currently not support dataset_name={dataset_name}')
-        exit(-1)
 
-    train_data = TabularDataset(path_train)
-    val_data = TabularDataset(path_val) if path_val else None
-    test_data = TabularDataset(path_test)
+    for fold_i, n_repeats, train_data, val_data, test_data, label, image_col, eval_metric, model_hyperparameters in load_dataset(dataset_name):
+        # TODO: currently only trial on one fold
+        if fold_i is not None and fold_i > 0:
+            break
 
-    fit_kwargs = dict(
-        train_data=train_data,
-        tuning_data=val_data,
-        hyperparameters=model_hyperparameters,
-        presets=presets,
-        time_limit=time_limit,
-    )
-    if do_multimodal:
-        # currently support PetFinder or CPP
-        # update several fit kwargs
-        hyperparameters = get_hyperparameter_config('multimodal')
-        if dataset_name == 'PetFinder':
-            # Following tutorial, to use first image for each row
-            train_data[image_col] = train_data[image_col].apply(lambda ele: ele.split(';')[0])
-            test_data[image_col] = test_data[image_col].apply(lambda ele: ele.split(';')[0])
-            train_data[image_col] = train_data[image_col].apply(image_id_to_path_petfinder)
-            test_data[image_col] = test_data[image_col].apply(image_id_to_path_petfinder)
-        elif dataset_name.startswith('CPP-'):
-            train_data[image_col] = train_data[image_col].apply(image_id_to_path_cpp)
-            test_data[image_col] = test_data[image_col].apply(image_id_to_path_cpp)
-        else:
-            raise ValueError(f'Currently NOT support do_multimodal with dataset_name={dataset_name}')
-        feature_metadata = FeatureMetadata.from_df(train_data)
-        feature_metadata = feature_metadata.add_special_types({image_col: ['image_path']})
-        fit_kwargs['hyperparameters'] = hyperparameters
-        fit_kwargs['feature_metadata'] = feature_metadata
-        fit_kwargs['presets'] = None
-    
-    if force_training is True or (not os.path.exists(model_save_path)):
-        predictor = TabularPredictor(
-            label=label,
-            eval_metric=eval_metric,
-            path=model_save_path,
+        fit_kwargs = dict(
+            train_data=train_data,
+            tuning_data=val_data,
+            hyperparameters=model_hyperparameters,
+            presets=presets,
+            time_limit=time_limit,
         )
-        predictor.fit(**fit_kwargs)
-    else:
-        predictor = TabularPredictor.load(model_save_path, require_version_match=False)
-    clean_partial_weighted_ensembles(predictor)
-    # predictor.persist_models('all', max_memory=0.75)   # to speed-up
-    persisted_models = predictor.persist_models('best', max_memory=0.75)
-    print(f'persisted_models={persisted_models}')
-    # leaderboard = predictor.leaderboard(test_data)   # This is for information displaying
-    # Load or Create Exp Result df
-    meta_cols = get_exp_df_meta_columns(predictor._learner.problem_type)
-    if os.path.exists(exp_result_save_path):
-        exp_result_df = pd.read_csv(exp_result_save_path, index_col='model')
-    else:
-        exp_result_df = pd.DataFrame(columns=meta_cols).set_index(MODEL).dropna()
-
-    """
-    # Infer with each single model of AG stack ensemble
-    print('--------')
-    best_model = predictor.get_model_best()
-    best_model_members = predictor._trainer.get_minimum_model_set(best_model, include_self=False)
-    print(f'AG0.4 with best_model={best_model}--{best_model_members}:')
-    leaderboard = predictor.leaderboard(silent=True)
-    for model_name, can_infer, time_val, score_val in zip(leaderboard['model'], leaderboard['can_infer'], leaderboard['pred_time_val'], leaderboard['score_val']):
-        if model_name.endswith('_Cascade'):
-            continue
-        if not can_infer:
-            continue
-        infer_times = []
-        for _ in range(run_xtime):
-            ts = time.time()
-            pred_proba = predictor.predict_proba(test_data, model=model_name)
-            te = time.time()
-            infer_times.append(te-ts)
-        infer_times = sum(infer_times) / len(infer_times)
-        test_metrics = append_approach_exp_result_to_df(exp_result_df, model_name, predictor, infer_times, pred_proba, test_data, label, time_val, score_val)
-        if model_name == best_model:
-            print(f'AG0.4 best_model {model_name}: {test_metrics} | time: {infer_times}s')
-    print('--------')
-
-    # Infer Time for fast to slow approach F2SP, or F2SP++
-    model_names = ['F2SP', 'F2SP++']   # change this for execution
-    for model_name in model_names:
-        print('--------')
-        # Set up configs
-        if model_name in ['F2SP++']:
-            build_pwe_flag = True
-        else:
-            build_pwe_flag = False
-        # Step1: get the model sequence by val inference
-        cascade_model_seq = get_cascade_model_sequence_by_val_marginal_time(predictor, build_pwe_flag=build_pwe_flag)
-        print(f'{model_name}: cascade_model_seq={cascade_model_seq}, default_threshol=0.9')
-        # Step2: stop can be done after each model
-        infer_times = []
-        for _ in range(run_xtime):
-            ts = time.time()
-            pred_proba = predictor.predict_proba(test_data, model=cascade_model_seq)
-            te = time.time()
-            infer_times.append(te-ts)
-        infer_times = sum(infer_times) / len(infer_times)
-        # add val_score
-        val_data, _ = helper_get_val_data(predictor)
-        ts = time.time()
-        val_pred_proba = predictor.predict_proba(val_data[0], model=cascade_model_seq)
-        te = time.time()
-        time_val = te - ts
-        val_labels = predictor.transform_labels(val_data[1], inverse=True)
-        val_metrics = predictor.evaluate_predictions(y_true=val_labels, y_pred=val_pred_proba, silent=True)
-        score_val = val_metrics[meta_cols[MAIN_METRIC_COL]]
-        test_metrics = append_approach_exp_result_to_df(exp_result_df, model_name, predictor, infer_times, pred_proba, test_data, label, time_val, score_val)
-        print(f'{model_name}: {test_metrics} | time: {infer_times}s')
-        print('--------')
-    """
-
-    # change this for execution
-    # model_names = ['F2SP/T(RePrt)', 'F2SP/TM(RePrt)', 'F2SP++/T(RePrt)', 'F2SP++/TM(RePrt)', 
-    #                'F2S/T(RePrt)', 'F2S/TM(RePrt)', 'F2S++/T(RePrt)', 'F2S++/TM(RePrt)']   
-    model_names = ['F2S/TM(RePrt)', 'F2S++/TM(RePrt)']   
-    for model_name in model_names:
-        print('--------')
-        # Set up configs
-        if model_name in ['F2SP++/T(RePrt)', 'F2SP++/TM(RePrt)']:
-            build_pwe_flag = True
-        else:
-            build_pwe_flag = False
-        if model_name.startswith('F2SP'):
-            better_than_prev = True
-        else:
-            better_than_prev = False
-        # Step 1: prepare cascade
-        cascade_model_seq = get_cascade_model_sequence_by_val_marginal_time(predictor, better_than_prev=better_than_prev, build_pwe_flag=build_pwe_flag)
-        if model_name in ['F2SP/T(RePrt)', 'F2SP++/T(RePrt)', 'F2S/T(RePrt)', 'F2S++/T(RePrt)']:
-            chosen_model_name, chosen_threshold, time_val, score_val = hpo_one_param(predictor, eval_metric, 
-                    'Rescale_Pareto', False, cascade_model_seq)
-        else:
-            # chosen_model_name, chosen_threshold, time_val, score_val \
-            #         = hpo_multi_params_random_search(predictor, eval_metric, cascade_model_seq, num_trails=hpo_search_n_trials)
-            chosen_model_name, chosen_threshold, time_val, score_val \
-                    = hpo_multi_params_TPE(predictor, eval_metric, cascade_model_seq, num_trails=hpo_search_n_trials)
-        # Step 2: do inference
-        infer_times = []
-        for _ in range(run_xtime):
-            if chosen_model_name == 'cascade':
-                ts = time.time()
-                learner = predictor._learner
-                trainer = predictor._trainer
-                test_data_X = learner.transform_features(test_data)
-                model_pred_proba_dict = trainer.get_model_pred_proba_dict(
-                        test_data_X, cascade_model_seq, fit=False,
-                        cascade=True, cascade_threshold=chosen_threshold
-                        )
-                pred_proba = model_pred_proba_dict[cascade_model_seq[-1]]
-                if learner.problem_type == BINARY:
-                    pred_proba = LabelCleanerMulticlassToBinary.convert_binary_proba_to_multiclass_proba(pred_proba)
-                te = time.time()
+        if do_multimodal:
+            # currently support PetFinder or CPP
+            # update several fit kwargs
+            hyperparameters = get_hyperparameter_config('multimodal')
+            if dataset_name == 'PetFinder':
+                # Following tutorial, to use first image for each row
+                train_data[image_col] = train_data[image_col].apply(lambda ele: ele.split(';')[0])
+                test_data[image_col] = test_data[image_col].apply(lambda ele: ele.split(';')[0])
+                train_data[image_col] = train_data[image_col].apply(image_id_to_path_petfinder)
+                test_data[image_col] = test_data[image_col].apply(image_id_to_path_petfinder)
+            elif dataset_name.startswith('CPP-'):
+                train_data[image_col] = train_data[image_col].apply(image_id_to_path_cpp)
+                test_data[image_col] = test_data[image_col].apply(image_id_to_path_cpp)
             else:
-                ts = time.time()
-                pred_proba = predictor.predict_proba(test_data, model=chosen_model_name)
-                te = time.time()
-            infer_times.append(te-ts)
-        infer_times = sum(infer_times) / len(infer_times)
-        test_metrics = append_approach_exp_result_to_df(exp_result_df, model_name, predictor, infer_times, pred_proba, test_data, label, time_val, score_val)
-        print(f'{model_name}: cascade_model_seq={cascade_model_seq}, chosen_threshold={chosen_model_name, chosen_threshold}')
-        print(f'{model_name}: score_val={score_val}, time_val={time_val}')
-        print(f'{model_name}: {test_metrics} | time: {infer_times}s')
+                raise ValueError(f'Currently NOT support do_multimodal with dataset_name={dataset_name}')
+            feature_metadata = FeatureMetadata.from_df(train_data)
+            feature_metadata = feature_metadata.add_special_types({image_col: ['image_path']})
+            fit_kwargs['hyperparameters'] = hyperparameters
+            fit_kwargs['feature_metadata'] = feature_metadata
+            fit_kwargs['presets'] = None
+
+        if fold_i is not None:
+            model_save_path = f'{model_save_path}/fold{fold_i}'
+        if force_training is True or (not os.path.exists(model_save_path)):
+            predictor = TabularPredictor(
+                label=label,
+                eval_metric=eval_metric,
+                path=model_save_path,
+            )
+            predictor.fit(**fit_kwargs)
+        else:
+            predictor = TabularPredictor.load(model_save_path, require_version_match=False)
         clean_partial_weighted_ensembles(predictor)
 
-    # store exp_result_df into disk
-    # add goodness score col after collecting all model results
-    global COLS_REPrt
-    model_val_perf_inftime_df = exp_result_df[COLS_REPrt[1:]]
-    val_data, _ = helper_get_val_data(predictor)
-    model_val_perf_inftime_df = wrap_rescale_by_pareto_frontier_model(model_val_perf_inftime_df, val_data, predictor, mask_pareto_dominated_models=False)
-    exp_result_df.update(model_val_perf_inftime_df[[SCORE]])
-    print(exp_result_df.round(ndigits).reset_index())
-    exp_result_save_dir = os.path.dirname(exp_result_save_path)
-    if not os.path.exists(exp_result_save_dir):
-        os.makedirs(exp_result_save_dir)
-    exp_result_df.to_csv(exp_result_save_path)
+        persisted_models = predictor.persist_models('best', max_memory=0.75)
+        print(f'persisted_models={persisted_models}')
+        # leaderboard = predictor.leaderboard(test_data)   # This is for information displaying
+        
+        # Load or Create Exp Result df
+        if fold_i is not None:
+            exp_result_save_path = exp_result_save_path.replace('.csv', f'/fold{fold_i}.csv')
+        meta_cols = get_exp_df_meta_columns(predictor._learner.problem_type)
+        if os.path.exists(exp_result_save_path):
+            exp_result_df = pd.read_csv(exp_result_save_path, index_col='model')
+        else:
+            exp_result_df = pd.DataFrame(columns=meta_cols).set_index(MODEL).dropna()
+
+        """
+        # ==============
+        # Infer with each single model of AG stack ensemble
+        print('--------')
+        best_model = predictor.get_model_best()
+        best_model_members = predictor._trainer.get_minimum_model_set(best_model, include_self=False)
+        print(f'AG0.4 with best_model={best_model}--{best_model_members}:')
+        leaderboard = predictor.leaderboard(silent=True)
+        for model_name, can_infer, time_val, score_val in zip(leaderboard['model'], leaderboard['can_infer'], leaderboard['pred_time_val'], leaderboard['score_val']):
+            if not can_infer:
+                continue
+            infer_times = []
+            for _ in range(n_repeats):
+                ts = time.time()
+                pred_proba = predictor.predict_proba(test_data, model=model_name)
+                te = time.time()
+                infer_times.append(te-ts)
+            infer_times = sum(infer_times) / len(infer_times)
+            test_metrics = append_approach_exp_result_to_df(exp_result_df, model_name, predictor, infer_times, pred_proba, test_data, label, time_val, score_val)
+            if model_name == best_model:
+                print(f'AG0.4 best_model {model_name}: {test_metrics} | time: {infer_times}s')
+        print('--------')
+
+
+        # ==============
+        # we use Rescale_Pareto (or goodness function) as default
+        model_names = ['F2SP/T', 'F2SP++/T', 'F2S/RAND-TM', 'F2S++/RAND-TM', 'F2S/TPE-TM', 'F2S++/TPE-TM']   
+        for model_name in model_names:
+            print('--------')
+            # Set up configs
+            if '++' in model_name:
+                build_pwe_flag = True
+            else:
+                build_pwe_flag = False
+            if model_name.startswith('F2SP'):
+                better_than_prev = True
+            else:
+                better_than_prev = False
+            # Step 1: prepare cascade
+            cascade_model_seq = get_cascade_model_sequence_by_val_marginal_time(predictor, better_than_prev=better_than_prev, build_pwe_flag=build_pwe_flag)
+            if model_name.endswith('T'):
+                chosen_model_name, chosen_threshold, time_val, score_val = hpo_one_param(predictor, eval_metric, 
+                        'Rescale_Pareto', False, cascade_model_seq)
+            else:
+                assert model_name.endswith('TM')
+                if model_name.endswith('RAND-TM'):
+                    chosen_model_name, chosen_threshold, time_val, score_val \
+                            = hpo_multi_params_random_search(predictor, eval_metric, cascade_model_seq, num_trails=hpo_search_n_trials)
+                elif model_name.endswith('TPE-TM'):
+                    chosen_model_name, chosen_threshold, time_val, score_val \
+                            = hpo_multi_params_TPE(predictor, eval_metric, cascade_model_seq, num_trails=hpo_search_n_trials)
+                else:
+                    raise ValueError(f'not support {model_name=}')
+            # Step 2: do inference
+            infer_times = []
+            for _ in range(n_repeats):
+                if chosen_model_name == 'cascade':
+                    ts = time.time()
+                    learner = predictor._learner
+                    trainer = predictor._trainer
+                    test_data_X = learner.transform_features(test_data)
+                    model_pred_proba_dict = trainer.get_model_pred_proba_dict(
+                            test_data_X, cascade_model_seq, fit=False,
+                            cascade=True, cascade_threshold=chosen_threshold
+                            )
+                    pred_proba = model_pred_proba_dict[cascade_model_seq[-1]]
+                    if learner.problem_type == BINARY:
+                        pred_proba = LabelCleanerMulticlassToBinary.convert_binary_proba_to_multiclass_proba(pred_proba)
+                    te = time.time()
+                else:
+                    ts = time.time()
+                    pred_proba = predictor.predict_proba(test_data, model=chosen_model_name)
+                    te = time.time()
+                infer_times.append(te-ts)
+            infer_times = sum(infer_times) / len(infer_times)
+            test_metrics = append_approach_exp_result_to_df(exp_result_df, model_name, predictor, infer_times, pred_proba, test_data, label, time_val, score_val)
+            print(f'{model_name}: cascade_model_seq={cascade_model_seq}, chosen_threshold={chosen_model_name, chosen_threshold}')
+            print(f'{model_name}: score_val={score_val}, time_val={time_val}')
+            print(f'{model_name}: {test_metrics} | time: {infer_times}s')
+            clean_partial_weighted_ensembles(predictor)
+        """
+
+        # store exp_result_df into disk
+        # add goodness score col after collecting all model results
+        global COLS_REPrt
+        model_val_perf_inftime_df = exp_result_df[COLS_REPrt[1:]]
+        val_data, _ = helper_get_val_data(predictor)
+        model_val_perf_inftime_df = wrap_rescale_by_pareto_frontier_model(model_val_perf_inftime_df, val_data, predictor, mask_pareto_dominated_models=False)
+        exp_result_df.update(model_val_perf_inftime_df[[SCORE]])
+        exp_result_df = exp_result_df.sort_values(by=[meta_cols[MAIN_METRIC_COL], SPEED], ascending=False)
+        print(exp_result_df.drop(columns=SPEED).round(ndigits).reset_index())
+        exp_result_save_dir = os.path.dirname(exp_result_save_path)
+        if not os.path.exists(exp_result_save_dir):
+            os.makedirs(exp_result_save_dir)
+        exp_result_df.to_csv(exp_result_save_path)
 
 
 if __name__ == '__main__':
@@ -840,9 +767,8 @@ if __name__ == '__main__':
     parser.add_argument('--exp_result_save_path', type=str, required=True)
     parser.add_argument('--force_training', action='store_true')
     parser.add_argument('--do_multimodal', action='store_true')
-    parser.add_argument('--run_xtime', type=int, default=3, help="Run X times of each approach to get stable infer time.")
     parser.add_argument('--predictor_presets', type=str, default='medium_quality')
-    parser.add_argument('--HPO_random_search_trials', type=int, default=3000)
+    parser.add_argument('--HPO_random_search_trials', type=int, default=1000)
     parser.add_argument('--time_limit', type=int, default=None, help='Training time limit in seconds')
     args = parser.parse_args()
     print(f'Exp arguments: {args}')

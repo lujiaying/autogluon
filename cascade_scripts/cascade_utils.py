@@ -5,11 +5,13 @@ Date: May 19
 
 import collections.abc
 import copy
-from typing import Tuple, Optional, Callable, List
+from typing import Tuple, Optional, List
 
 import numpy as np
 import pandas as pd
+import openml
 
+from autogluon.tabular import TabularDataset
 from autogluon.core.constants import BINARY, MULTICLASS
 
 # --------------------------------
@@ -296,8 +298,128 @@ def get_exp_df_meta_columns(problem_type: str) -> List[str]:
     else:
         raise ValueError(f'Invalid input arg problem_type={problem_type}')
     return meta_cols
-
 # --------------------------------
+
+# Load Dataset; some may yeild 10-fold crossvalidation
+def load_dataset(dataset_name: str) -> tuple:
+    path_val = ''    # by default, dataset not contain validation set
+    # Cover Type MultiClass
+    if dataset_name == 'CoverTypeMulti':
+        path_prefix = 'https://autogluon.s3.amazonaws.com/datasets/CoverTypeMulticlassClassification/'
+        label = 'Cover_Type'
+        image_col = None
+        path_train = path_prefix + 'train_data.csv'
+        path_test = path_prefix + 'test_data.csv'
+        eval_metric = 'accuracy'
+        model_hyperparameters = 'default'
+        n_folds = 1
+        n_repeats = 3
+    # Adult Income Dataset
+    elif dataset_name == 'Inc':
+        path_prefix = 'https://autogluon.s3.amazonaws.com/datasets/Inc/'
+        label = 'class'
+        image_col = None
+        path_train = path_prefix + 'train.csv'
+        path_test = path_prefix + 'test.csv'
+        eval_metric = 'roc_auc'
+        model_hyperparameters = 'default'
+        n_folds = 1
+        n_repeats = 3
+    # PetFinder
+    elif dataset_name == 'PetFinder':
+        path_prefix = 'datasets/petfinder_processed/'
+        label = 'AdoptionSpeed'
+        image_col = "Images"
+        path_train = path_prefix + 'train.csv'
+        # We have to use dev, instead of test,
+        # since test.csv NOT release labels
+        path_test = path_prefix + 'dev.csv'
+        eval_metric = 'acc'
+        model_hyperparameters = 'default'
+        n_folds = 1
+        n_repeats = 3
+    # CPP one session
+    elif dataset_name == 'CPP-6aa99d1a':
+        path_prefix = 'datasets/cpp_research_corpora/2021_60datasets/6aa99d1a-1d4b-4d30-bd8b-a26f259b6482/'
+        label = 'label'
+        image_col = 'image_id'
+        path_train = path_prefix + 'train/part-00001-31cb8e7f-4de7-4c5a-8068-d734df5cc6c7.c000.snappy.parquet'
+        path_test = path_prefix + 'test/part-00001-31cb8e7f-4de7-4c5a-8068-d734df5cc6c7.c000.snappy.parquet'
+        eval_metric = 'roc_auc'
+        model_hyperparameters = 'default'
+        n_folds = 1
+        n_repeats = 3
+    # CPP on session
+    elif dataset_name == 'CPP-3564a7a7':
+        path_prefix = 'datasets/cpp_research_corpora/2021_60datasets/3564a7a7-0e7c-470f-8f9e-5a029be8e616/'
+        label = 'label'
+        image_col = 'image_id'
+        path_train = path_prefix + 'train/part-00001-9c4bc314-0803-4d61-a7c2-6f74f9c9ccfd.c000.snappy.parquet'
+        path_test = path_prefix + 'test/part-00001-9c4bc314-0803-4d61-a7c2-6f74f9c9ccfd.c000.snappy.parquet'
+        eval_metric = 'roc_auc'
+        model_hyperparameters = 'default'
+        n_folds = 1
+        n_repeats = 3
+    elif dataset_name.startswith('openml'):
+        """
+        # Datasets selected based on being able to
+        #  1. train fully on AutoGluon-Medium in <60 seconds on a m5.2xlarge.
+        #  2. get significant improvement in score when using AutoGluon-Best.
+        datasets = [
+            359958,  # 'pc4',
+            359947,  # 'MIP-2016-regression',
+            190392,  # 'madeline',
+            359962,  # 'kc1',
+            168911,  # 'jasmine',
+            359966,  # 'Internet-Advertisements',
+            359954,  # 'eucalyptus',
+            168757,  # 'credit-g',
+            359950,  # 'boston',
+            359956,  # 'qsar-biodeg',
+            359975,  # 'Satellite',
+            359963,  # 'segment',
+            359972,  # 'sylvine',
+            359934,  # 'tecator',
+            146820,  # 'wilt',
+        ]
+        """
+        task_id = int(dataset_name.split('-')[1])
+        task = openml.tasks.get_task(task_id)
+        print(task)
+        label = task.target_name
+        image_col = None
+        assert task.task_type_id.name == 'SUPERVISED_CLASSIFICATION'
+        if len(task.class_labels) > 2:
+            # problem_type = 'multiclass'
+            eval_metric = 'accuracy'
+        else:
+            # problem_type = 'binary'
+            eval_metric = 'roc_auc'
+        model_hyperparameters = 'default'
+        n_repeats, n_folds, n_samples = task.get_split_dimensions()
+        assert n_repeats == 1
+        assert n_samples == 1
+    else:
+        print(f'currently not support dataset_name={dataset_name}')
+        exit(-1)
+
+    if n_folds == 1:
+        # no need to yield folds
+        train_data = TabularDataset(path_train)
+        val_data = TabularDataset(path_val) if path_val else None
+        test_data = TabularDataset(path_test)
+        yield None, n_repeats, train_data, val_data, test_data, label, image_col, eval_metric, model_hyperparameters
+    else:
+        # yeild multiple folds
+        # X, y, _, _ = task.get_dataset().get_data(task.target_name)
+        all_data, _, _, _ = task.get_dataset().get_data()
+        print(f'{dataset_name=} {all_data.shape=}')
+        val_data = None
+        for fold_idx in range(n_folds):
+            train_indices, test_indices = task.get_train_test_split_indices(repeat=0, fold=fold_idx, sample=0)
+            train_data = all_data.loc[train_indices]
+            test_data = all_data.loc[test_indices]
+            yield fold_idx, n_repeats, train_data, val_data, test_data, label, image_col, eval_metric, model_hyperparameters
 
 
 if __name__ == '__main__':
