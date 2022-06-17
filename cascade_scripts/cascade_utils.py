@@ -11,7 +11,7 @@ import numpy as np
 import pandas as pd
 import openml
 
-from autogluon.tabular import TabularDataset
+from autogluon.tabular import TabularDataset, TabularPredictor
 from autogluon.core.constants import BINARY, MULTICLASS
 
 # --------------------------------
@@ -230,12 +230,15 @@ def validate_inputs(costs, sense=None):
 # AG customized score function considering both speed and performance
 # Suggested by Nick Erickson
 
+# CONSTANTS
 MODEL = 'model'
 ERROR = 'error'
 ERROR_NORM = 'error_norm'
 SCORE = 'goodness'
 SPEED = 'speed'
 SPEED_ADJUSTED = 'speed_adjusted'
+PRED_TIME = 'pred_time_val'
+PERFORMANCE = 'score_val'
 
 
 def custom_mean(values, weights):
@@ -279,10 +282,84 @@ def rescale_by_pareto_frontier_model(model_df: pd.DataFrame, speed_soft_cap: flo
     model_df[SPEED_ADJUSTED] = model_df[SPEED_ADJUSTED] / model_df[SPEED_ADJUSTED].min() - 1
 
     pairs = list(zip(model_df[ERROR_NORM], model_df[SPEED_ADJUSTED]))
-
     scores = custom_mean(pairs, weights=weights)
     model_df[SCORE] = scores
     return model_df
+
+
+def helper_get_val_data(predictor: TabularPredictor) -> Tuple[Tuple[np.ndarray, np.ndarray], bool]:
+    """
+    For models trained with bagging strategy, 
+    we no longer able to directly get val_data
+    """
+    val_data = predictor.load_data_internal('val')   # Tuple[np.array, np.array] for X, Y
+    is_trained_bagging = False
+    if val_data[0] is None and val_data[1] is None:
+        val_data = predictor.load_data_internal('train')   # oof_pred actually on train_data
+        is_trained_bagging = True
+    return val_data, is_trained_bagging
+
+
+class AGCasGoodness:
+    def __init__(self, metric_name: str,
+            model_perf_inftime_df: pd.DataFrame, val_data: Tuple[np.ndarray, np.ndarray],
+            speed_soft_cap: int = 1000, weights: Tuple[float, float] = (-1.0, 0.01),
+            random_guess_perf: Optional[float] = None):
+        self.metric_name = metric_name
+        self.model_perf_inftime_df = model_perf_inftime_df
+        self.speed_soft_cap = speed_soft_cap
+        self.weights = weights
+        self._val_nrows = val_data[0].shape[0]
+        # Set up random_guess_perf, now support roc_auc and accuracy
+        if random_guess_perf is None:
+            if metric_name == 'roc_auc':
+                random_guess_perf = 0.5
+            elif metric_name in ['acc', 'accuracy']:
+                random_guess_perf = val_data[1].value_counts(normalize=True).max()
+            else:
+                raise ValueError(f'Currently NOT support random_guess_perf=`None` for metric={metric_name}')
+        assert isinstance(random_guess_perf, float)
+        self.random_guess_perf = random_guess_perf
+        # Store error_Min and speed_min per models of AG trained stack ensemble
+        if ERROR not in model_perf_inftime_df:
+            errors = self._cal_error(model_perf_inftime_df[PERFORMANCE])
+        else:
+            errors = model_perf_inftime_df[ERROR]
+        self.error_min = errors.min()
+        if SPEED not in model_perf_inftime_df:
+            speeds = self._cal_speed(model_perf_inftime_df[PRED_TIME])
+        else:
+            speeds = model_perf_inftime_df[SPEED]
+        self.speed_min = adjust_speed(speeds.min(), speed_soft_cap)
+
+    def _cal_error(self, metric_value: pd.Series) -> pd.Series:
+        assert self.metric_name in ['roc_auc', 'acc', 'accuracy']
+        return 1.0 - metric_value
+
+    def _cal_speed(self, pred_time: pd.Series) -> pd.Series:
+        return self._val_nrows / pred_time
+
+    def __call__(self, model_perf_inftime_df: pd.DataFrame) -> pd.DataFrame:
+        model_df = model_perf_inftime_df.copy()
+        # in columns = [MODEL, PERFORMANCE, PRED_TIME]
+        # assume we would generate ERROR and SPEED here
+        if ERROR not in model_df.columns:
+            model_df[ERROR] = self._cal_error(model_df[PERFORMANCE])
+        if SPEED not in model_df.columns:
+            model_df[SPEED] = self._cal_speed(model_df[PRED_TIME])
+
+        # Main calculation logic
+        model_df[ERROR_NORM] = (model_df[ERROR] - self.error_min) / self.error_min
+        model_df[ERROR_NORM] = model_df[ERROR_NORM].fillna(0.0)
+        model_df[ERROR_NORM] += apply_extra_penalty_on_error(model_df[ERROR], self.metric_name, self.random_guess_perf)
+        model_df[SPEED_ADJUSTED] = [adjust_speed(v, soft_cap=self.speed_soft_cap) for v in model_df[SPEED].values]
+        model_df[SPEED_ADJUSTED] = model_df[SPEED_ADJUSTED] / model_df[SPEED_ADJUSTED].min() - 1
+
+        pairs = list(zip(model_df[ERROR_NORM], model_df[SPEED_ADJUSTED]))
+        scores = custom_mean(pairs, weights=self.weights)
+        model_df[SCORE] = scores
+        return model_df
+
 # --------------------------------
 
 # Experiments Reulst DataFrame Related Functions
@@ -429,7 +506,7 @@ if __name__ == '__main__':
 
     ACC = 'acc'
     speed_soft_caps = [1, 10, 100]  # speed beyond this value is penalized exponentially, contributes less
-    weights = [-1, 0.01]  # aka: For every 1% error increase, speed must increase by 100% to compensate
+    weights = (-1, 0.01)  # aka: For every 1% error increase, speed must increase by 100% to compensate
 
     pairs = [
         ['WeightedEnsemble', 0.9762, 1],  # acc, inf speed
@@ -442,13 +519,25 @@ if __name__ == '__main__':
     ]
 
     model_df = pd.DataFrame(pairs, columns=[MODEL, ACC, SPEED])
-    model_df = model_df.set_index(keys=MODEL, drop=True)
+    model_df = model_df.set_index(keys=MODEL)
     model_df[ERROR] = 1.0 - model_df[ACC]  # Different for each metric...
 
     for speed_soft_cap in speed_soft_caps:
-        model_df_out = rescale_by_pareto_frontier_model(model_df=model_df, speed_soft_cap=speed_soft_cap, metric_name=ACC, weights=weights, random_guess_perf=0.5)
-        model_df_out = model_df_out.sort_values(by=[SCORE, ERROR_NORM], ascending=False)
+        # model_df_out = rescale_by_pareto_frontier_model(model_df=model_df, speed_soft_cap=speed_soft_cap, metric_name=ACC, weights=weights, random_guess_perf=0.5)
+        # model_df_out = model_df_out.sort_values(by=[SCORE, ERROR_NORM], ascending=False)
+        # test AGCasGoodness class
+        fake_val_data = (np.random.rand(1000), None)
+        goodness_func = AGCasGoodness(ACC, model_df, fake_val_data, speed_soft_cap, weights, random_guess_perf=0.5)
+        # add one new model to simulate the cascade building
+        # we may able to find cascade with higher acc and speed
+        simulated_pairs = pairs + [['T-TPE', 0.98, 2.5]]
+        simulated_df = pd.DataFrame(simulated_pairs, columns=[MODEL, ACC, SPEED]).set_index(MODEL)
+        simulated_df[ERROR] = 1.0 - simulated_df[ACC]
+        goodness_df_out = goodness_func(simulated_df)
+        goodness_df_out = goodness_df_out.sort_values(by=[SCORE, ERROR_NORM], ascending=False)
         print(f'custom_mean (soft_cap={speed_soft_cap}, weights={weights}):')
         with pd.option_context('display.max_rows', None, 'display.max_columns', None, 'display.width', 1000):
-            print(model_df_out)
+            # print(model_df_out)
+            print('-- to compare diff --')
+            print(goodness_df_out)
         print('-----------')
