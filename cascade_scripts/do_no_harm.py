@@ -10,7 +10,7 @@ from functools import partial, reduce
 import operator
 import itertools
 import argparse
-
+from enum import Enum
 
 # from sklearnex import patch_sklearn
 # patch_sklearn()   # This cause bug!!!
@@ -25,8 +25,8 @@ from autogluon.core.data.label_cleaner import LabelCleanerMulticlassToBinary
 from autogluon.tabular.configs.hyperparameter_configs import get_hyperparameter_config
 import tqdm
 
-from .cascade_utils import load_dataset, helper_get_val_data, AGCasGoodness
-from .cascade_utils import paretoset, rescale_by_pareto_frontier_model
+from .cascade_utils import load_dataset, helper_get_val_data, paretoset
+from .cascade_utils import AGCasGoodness, AGCasAccuracy
 from .cascade_utils import SPEED, ERROR, MODEL, SCORE, PRED_TIME, PERFORMANCE
 from .cascade_utils import get_exp_df_meta_columns, MAIN_METRIC_COL, SEC_METRIC_COL
 
@@ -37,6 +37,12 @@ PWE_suffix = '_PWECascade'
 COLS_REPrt = [MODEL, PERFORMANCE, PRED_TIME]       # columns for rescale_by_pareto_frontier_model()
 RANDOM_MAGIC_NUM = 0
 CASCADE_MNAME = 'Cascade'
+
+
+class HPOScoreFunc(Enum):
+    GOODNESS = 'GOODNESS'   # a metric considering both accuracy and speed
+    ACCURACY = 'ACCURACY'   # maximize accuracy given min speed/infer time limit
+    SPEED = 'SPEED'         # maximize speed given min accuracy
 
 
 def image_id_to_path(image_id: Optional[str], image_path: str, image_path_suffix: str = ''
@@ -189,11 +195,14 @@ def build_threshold_cands_dynamic(model_pred_proba_dict: Dict[str, np.ndarray],
 
 
 def hpo_multi_params_random_search(predictor: TabularPredictor, cascade_model_seq: List[str],
-        HPO_score_func_name: str = 'Rescale_Pareto',
+        hpo_score_func_name: HPOScoreFunc = HPOScoreFunc.GOODNESS,
         num_trails: int = 1000,
-        ) -> Tuple[str, Optional[List[float]], float, float]:
+        infer_time_limit: Optional[float] = None) -> Tuple[str, Optional[List[float]], float, float]:
     """
     Conduct a randommized search over hyperparameters
+    Args:
+        infer_time_limit: required when hpo_score_func_name=="ACCURACY".
+            indicates seconds per row to adhere
     """
     model_delim = '-'
     cas_delim = '_'
@@ -224,7 +233,6 @@ def hpo_multi_params_random_search(predictor: TabularPredictor, cascade_model_se
             points = rng.choice(cand, size=num_trails, p=prob)
             search_space.append(points)   # leads to (cascade_len-1, num_trails)
         search_space = np.stack(search_space, axis=1)   # (num_trails, cascade_len-1)
-        # search_space = rng.choice(thresholds_cands, size=(num_trails, cascade_len-1), p=thresholds_probs).tolist()
     print('[hpo_multi_params_random_search] Start produce val_metrics, and val_time over search space')
     for thresholds in tqdm.tqdm(search_space):
         metric_value, infer_time = get_cascade_metric_and_time_by_threshold(val_data, thresholds,
@@ -235,14 +243,20 @@ def hpo_multi_params_random_search(predictor: TabularPredictor, cascade_model_se
     columns = COLS_REPrt
     cascade_perf_inftime_l = pd.DataFrame(cascade_perf_inftime_l, columns=columns)
     model_perf_inftime_df = pd.concat([leaderboard[columns], cascade_perf_inftime_l]).set_index(MODEL)
-    if HPO_score_func_name == 'Rescale_Pareto':
-        # port to the Goodness class
+    if hpo_score_func_name == HPOScoreFunc.GOODNESS:
         HPO_reward_func = AGCasGoodness(metric_name, model_perf_inftime_df, val_data)
         model_perf_inftime_out_df = HPO_reward_func(model_perf_inftime_df).sort_values(by=SCORE, ascending=False)
         chosen_row = model_perf_inftime_out_df.iloc[0]
         chosen_model, time_val, score_val = chosen_row.name, chosen_row.loc[PRED_TIME], chosen_row.loc[PERFORMANCE]
+    elif hpo_score_func_name == HPOScoreFunc.ACCURACY:
+        assert infer_time_limit is not None
+        time_val_ubound = infer_time_limit * val_data[0].shape[0]
+        model_perf_inftime_df = model_perf_inftime_df.loc[model_perf_inftime_df[PRED_TIME] <= time_val_ubound]
+        model_perf_inftime_df = model_perf_inftime_df.sort_values(by=PERFORMANCE, ascending=False)
+        chosen_row = model_perf_inftime_df.iloc[0]
+        chosen_model, time_val, score_val = chosen_row.name, chosen_row.loc[PRED_TIME], chosen_row.loc[PERFORMANCE]
     else:
-        raise ValueError(f'hpo_multi_params_random_search() not support arg HPO_score_func_name={HPO_score_func_name}')
+        raise ValueError(f'hpo_multi_params_random_search() not support arg func_name={hpo_score_func_name}')
     if chosen_model.startswith(cas_starting_str):
         chosen_model_name = CASCADE_MNAME
         chosen_threshold = chosen_model.split(model_delim)[1].split(cas_delim)
@@ -254,8 +268,9 @@ def hpo_multi_params_random_search(predictor: TabularPredictor, cascade_model_se
 
 
 def hpo_multi_params_TPE(predictor: TabularPredictor, cascade_model_seq: List[str],
-        HPO_score_func_name: str = 'Rescale_Pareto',
+        hpo_score_func_name: HPOScoreFunc = HPOScoreFunc.GOODNESS,
         num_trails: int = 1000, warmup_percent = 0.05,
+        infer_time_limit: Optional[float] = None,
         ) -> Tuple[str, Optional[List[float]], float, float]:
     """
     Use TPE for HP
@@ -302,10 +317,14 @@ def hpo_multi_params_TPE(predictor: TabularPredictor, cascade_model_seq: List[st
     # Prepare for HPO
     global COLS_REPrt
     model_perf_inftime_df = leaderboard[COLS_REPrt].copy().set_index(MODEL)
-    if HPO_score_func_name == 'Rescale_Pareto':
-        HPO_reward_func = AGCasGoodness(metric_name, model_perf_inftime_df, val_data)
+    if hpo_score_func_name == HPOScoreFunc.GOODNESS:
+        HPO_reward_func = AGCasGoodness(metric_name, model_perf_inftime_df, val_data)   # may get negative scores
+    elif hpo_score_func_name == HPOScoreFunc.ACCURACY:
+        assert infer_time_limit is not None
+        time_val_ubound = infer_time_limit * val_data[0].shape[0]
+        HPO_reward_func = AGCasAccuracy(metric_name, time_val_ubound)
     else:
-        raise ValueError('Currently hpo_multi_params_TPE() only support "Rescale_Pareto" as goodness function')
+        raise ValueError(f'Currently hpo_multi_params_TPE() NOT support func={hpo_score_func_name}')
     # start the HPO
     model_threshold_cands_dict = build_threshold_cands_dynamic(model_pred_proba_dict, problem_type)
     warmup_search_space = []
@@ -479,6 +498,8 @@ def main(args: argparse.Namespace):
     presets = args.predictor_presets
     hpo_search_n_trials = args.hpo_search_n_trials
     time_limit = args.time_limit
+    hpo_score_func_name = args.hpo_score_func_name
+    infer_time_limit = args.infer_time_limit
     ndigits = 4
 
     for fold_i, n_repeats, train_data, val_data, test_data, label, image_col, eval_metric, model_hyperparameters in load_dataset(dataset_name):
@@ -567,7 +588,8 @@ def main(args: argparse.Namespace):
 
         # ==============
         # we use Rescale_Pareto (or goodness function) as default
-        model_names = ['F2S/RAND-TM', 'F2SP/RAND-TM', 'F2S++/RAND-TM', 'F2SP++/RAND-TM', 'F2S/TPE-TM', 'F2SP/TPE-TM', 'F2S++/TPE-TM', 'F2SP++/TPE-TM', ]   
+        # model_names = ['F2S/RAND-TM', 'F2SP/RAND-TM', 'F2S++/RAND-TM', 'F2SP++/RAND-TM', 'F2S/TPE-TM', 'F2SP/TPE-TM', 'F2S++/TPE-TM', 'F2SP++/TPE-TM', ]   
+        model_names = ['F2SP++/RAND', 'F2SP++/TPE']
         for model_name in model_names:
             print('--------')
             # Set up configs
@@ -581,15 +603,28 @@ def main(args: argparse.Namespace):
                 better_than_prev = False
             # Step 1: prepare cascade
             cascade_model_seq = get_cascade_model_sequence_by_val_marginal_time(predictor, better_than_prev=better_than_prev, build_pwe_flag=build_pwe_flag)
-            assert model_name.endswith('TM')
-            if model_name.endswith('RAND-TM'):
+            if model_name.endswith('RAND'):
                 chosen_model_name, chosen_threshold, time_val, score_val \
-                        = hpo_multi_params_random_search(predictor, cascade_model_seq, num_trails=hpo_search_n_trials)
-            elif model_name.endswith('TPE-TM'):
+                        = hpo_multi_params_random_search(predictor, cascade_model_seq, 
+                                hpo_score_func_name=hpo_score_func_name,
+                                num_trails=hpo_search_n_trials,
+                                infer_time_limit=infer_time_limit)
+            elif model_name.endswith('TPE'):
                 chosen_model_name, chosen_threshold, time_val, score_val \
-                        = hpo_multi_params_TPE(predictor, cascade_model_seq, num_trails=hpo_search_n_trials)
+                        = hpo_multi_params_TPE(predictor, cascade_model_seq,
+                                hpo_score_func_name=hpo_score_func_name,
+                                num_trails=hpo_search_n_trials,
+                                infer_time_limit=infer_time_limit)
             else:
                 raise ValueError(f'not support {model_name=}')
+            # Construct full name
+            if hpo_score_func_name == HPOScoreFunc.GOODNESS:
+                model_name = f'{model_name}_{hpo_score_func_name.name}'
+            elif hpo_score_func_name == HPOScoreFunc.ACCURACY:
+                model_name = f'{model_name}_{hpo_score_func_name.name}_{infer_time_limit}'
+            elif hpo_score_func_name == HPOScoreFunc.SPEED:
+                assert ValueError('Not implement yet')
+                model_name = None
             # Step 2: do inference
             infer_times = []
             for _ in range(n_repeats):
@@ -642,8 +677,12 @@ if __name__ == '__main__':
     parser.add_argument('--force_training', action='store_true')
     parser.add_argument('--do_multimodal', action='store_true')
     parser.add_argument('--predictor_presets', type=str, default='medium_quality')
+    parser.add_argument('--time_limit', type=float, default=None, help='Training time limit in seconds')
     parser.add_argument('--hpo_search_n_trials', type=int, default=1000)
-    parser.add_argument('--time_limit', type=int, default=None, help='Training time limit in seconds')
+    parser.add_argument('--hpo_score_func_name', type=HPOScoreFunc, choices=list(HPOScoreFunc),
+        default=HPOScoreFunc.GOODNESS)
+    parser.add_argument('--infer_time_limit', type=float, default=None,
+            help='Required when hpo_score_func_name=="ACCURACY"')
     args = parser.parse_args()
     print(f'Exp arguments: {args}')
 

@@ -305,7 +305,7 @@ class AGCasGoodness:
             model_perf_inftime_df: pd.DataFrame, val_data: Tuple[np.ndarray, np.ndarray],
             speed_soft_cap: int = 1000, weights: Tuple[float, float] = (-1.0, 0.01),
             random_guess_perf: Optional[float] = None):
-        self.metric_name = metric_name
+        self.metric_name = metric_name   # indicates type of score_val
         self.model_perf_inftime_df = model_perf_inftime_df
         self.speed_soft_cap = speed_soft_cap
         self.weights = weights
@@ -340,6 +340,7 @@ class AGCasGoodness:
         return self._val_nrows / pred_time
 
     def __call__(self, model_perf_inftime_df: pd.DataFrame) -> pd.DataFrame:
+        # TODO: remove the copy() line to acclerate
         model_df = model_perf_inftime_df.copy()
         # in columns = [MODEL, PERFORMANCE, PRED_TIME]
         # assume we would generate ERROR and SPEED here
@@ -359,6 +360,22 @@ class AGCasGoodness:
         scores = custom_mean(pairs, weights=self.weights)
         model_df[SCORE] = scores
         return model_df
+
+
+class AGCasAccuracy:
+    def __init__(self, metric_name: str, infer_time_ubound: float):
+        assert metric_name in ['roc_auc', 'acc', 'accuracy']
+        self.metric_name = metric_name
+        self.const_penlaty = -1e6
+        self.infer_time_ubound = infer_time_ubound   # the overall val time upper bound
+
+    def __call__(self, model_perf_inftime_df: pd.DataFrame) -> pd.DataFrame:
+        model_perf_inftime_df = model_perf_inftime_df.copy()
+        # TODO: may use a smooth version of penalty function
+        inftime_penalty = np.where(model_perf_inftime_df[PRED_TIME] <= self.infer_time_ubound, 0.0, self.const_penlaty)
+        model_perf_inftime_df[SCORE] = model_perf_inftime_df[PERFORMANCE] + inftime_penalty
+        return model_perf_inftime_df
+
 
 # --------------------------------
 
