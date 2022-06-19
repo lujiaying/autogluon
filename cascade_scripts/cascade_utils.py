@@ -366,7 +366,7 @@ class AGCasAccuracy:
     def __init__(self, metric_name: str, infer_time_ubound: float):
         assert metric_name in ['roc_auc', 'acc', 'accuracy']
         self.metric_name = metric_name
-        self.const_penlaty = -1e6
+        self.const_penlaty = -1e4
         self.infer_time_ubound = infer_time_ubound   # the overall val time upper bound
 
     def __call__(self, model_perf_inftime_df: pd.DataFrame) -> pd.DataFrame:

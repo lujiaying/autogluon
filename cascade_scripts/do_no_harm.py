@@ -251,6 +251,7 @@ def hpo_multi_params_random_search(predictor: TabularPredictor, cascade_model_se
     elif hpo_score_func_name == HPOScoreFunc.ACCURACY:
         assert infer_time_limit is not None
         time_val_ubound = infer_time_limit * val_data[0].shape[0]
+        print(f'time_val_ubound={time_val_ubound} given infer_time_limit={infer_time_limit}')
         model_perf_inftime_df = model_perf_inftime_df.loc[model_perf_inftime_df[PRED_TIME] <= time_val_ubound]
         model_perf_inftime_df = model_perf_inftime_df.sort_values(by=PERFORMANCE, ascending=False)
         chosen_row = model_perf_inftime_df.iloc[0]
@@ -322,6 +323,8 @@ def hpo_multi_params_TPE(predictor: TabularPredictor, cascade_model_seq: List[st
     elif hpo_score_func_name == HPOScoreFunc.ACCURACY:
         assert infer_time_limit is not None
         time_val_ubound = infer_time_limit * val_data[0].shape[0]
+        print(f'time_val_ubound={time_val_ubound} given infer_time_limit={infer_time_limit}')
+        # TODO: how to add prompt if infer_time_limit is IMPOSSIBLE
         HPO_reward_func = AGCasAccuracy(metric_name, time_val_ubound)
     else:
         raise ValueError(f'Currently hpo_multi_params_TPE() NOT support func={hpo_score_func_name}')
@@ -589,7 +592,7 @@ def main(args: argparse.Namespace):
         # ==============
         # we use Rescale_Pareto (or goodness function) as default
         # model_names = ['F2S/RAND-TM', 'F2SP/RAND-TM', 'F2S++/RAND-TM', 'F2SP++/RAND-TM', 'F2S/TPE-TM', 'F2SP/TPE-TM', 'F2S++/TPE-TM', 'F2SP++/TPE-TM', ]   
-        model_names = ['F2SP++/RAND', 'F2SP++/TPE']
+        model_names = ['F2SP++/TPE']
         for model_name in model_names:
             print('--------')
             # Set up configs
