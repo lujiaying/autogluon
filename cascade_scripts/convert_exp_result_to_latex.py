@@ -22,12 +22,24 @@ Model_Name_Map = OrderedDict([
     ('ExtraTreesGini', ('XT-G', 'g'))
     ])
 
+Model_Name_Map_MM = OrderedDict([
+    ('WeightedEnsemble_L2', ('WE\_L2', 'a')),
+    ('CatBoost', ('Cat', 'd')),
+    ('VowpalWabbit', ('VW', 'd')),
+    ('NeuralNetTorch', ('NN', 'f')),
+    ('LightGBM', ('GBM', 'g')),
+    ('XGBoost', ('XGB', 'g')),
+    ('TextPredictor', ('TXT\_NN', 'h')),
+    ('ImagePredictor', ('IMG\_NN', 'i'))
+    ])
+
 
 def main(args: argparse.Namespace):
     exp_df = pd.read_csv(args.exp_result_save_path).set_index('model')
     print(exp_df[[args.perf_metric_name,'speed']])
     output = []
-    for mname, (mname_short, fig_label) in Model_Name_Map.items():
+    model_name_map = Model_Name_Map_MM if 'PetFinder' in args.exp_result_save_path else Model_Name_Map
+    for mname, (mname_short, fig_label) in model_name_map.items():
         if mname not in exp_df.index:
             continue
         row = exp_df.loc[mname]

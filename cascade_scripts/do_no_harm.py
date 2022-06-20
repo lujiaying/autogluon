@@ -590,9 +590,9 @@ def main(args: argparse.Namespace):
         """
 
         # ==============
-        # we use Rescale_Pareto (or goodness function) as default
-        # model_names = ['F2S/RAND-TM', 'F2SP/RAND-TM', 'F2S++/RAND-TM', 'F2SP++/RAND-TM', 'F2S/TPE-TM', 'F2SP/TPE-TM', 'F2S++/TPE-TM', 'F2SP++/TPE-TM', ]   
-        model_names = ['F2SP++/TPE']
+        # we use egoodness function as default
+        # model_names = ['F2S/RAND', 'F2SP/RAND', 'F2S++/RAND', 'F2SP++/RAND', 'F2S/TPE', 'F2SP/TPE', 'F2S++/TPE', 'F2SP++/TPE', ]   
+        model_names = ['F2SP++/RAND', 'F2SP++/TPE']
         for model_name in model_names:
             print('--------')
             # Set up configs

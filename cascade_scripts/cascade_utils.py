@@ -259,15 +259,15 @@ def adjust_speed(val, soft_cap, soft_cap_func=np.log10):
     return val
 
 def apply_extra_penalty_on_error(model_errors: pd.Series, metric_name: str,
-        random_guess_perf: Optional[float] = None, constant: float = 0.05) -> pd.Series:
-    if random_guess_perf is None:
+        random_guess_error: Optional[float] = None, constant: float = 0.05) -> pd.Series:
+    if random_guess_error is None:
         if metric_name == 'roc_auc':
-            random_guess_perf = 0.5
+            random_guess_error = 0.5
         elif metric_name == 'acc':
-            random_guess_perf = 0.5
+            random_guess_error = 0.5
         else:
             raise ValueError(f'apply_extra_penalty_on_error() not support {metric_name=}')
-    model_penalty = model_errors / random_guess_perf
+    model_penalty = model_errors / random_guess_error
     extra_penalty = constant / (model_penalty.clip(lower=1.0) - model_penalty) - constant
     return extra_penalty
 
@@ -277,7 +277,7 @@ def rescale_by_pareto_frontier_model(model_df: pd.DataFrame, speed_soft_cap: flo
     model_df = copy.deepcopy(model_df)
     model_df[ERROR_NORM] = (model_df[ERROR] - model_df[ERROR].min()) / model_df[ERROR].min()
     model_df[ERROR_NORM] = model_df[ERROR_NORM].fillna(0.0)
-    model_df[ERROR_NORM] += apply_extra_penalty_on_error(model_df[ERROR].copy(), metric_name, random_guess_perf)
+    model_df[ERROR_NORM] += apply_extra_penalty_on_error(model_df[ERROR].copy(), metric_name, 1.0-random_guess_perf)
     model_df[SPEED_ADJUSTED] = [adjust_speed(v, soft_cap=speed_soft_cap) for v in model_df[SPEED].values]
     model_df[SPEED_ADJUSTED] = model_df[SPEED_ADJUSTED] / model_df[SPEED_ADJUSTED].min() - 1
 
@@ -311,15 +311,17 @@ class AGCasGoodness:
         self.weights = weights
         self._val_nrows = val_data[0].shape[0]
         # Set up random_guess_perf, now support roc_auc and accuracy
+        # This is indeed the random guess error
         if random_guess_perf is None:
             if metric_name == 'roc_auc':
                 random_guess_perf = 0.5
             elif metric_name in ['acc', 'accuracy']:
                 random_guess_perf = val_data[1].value_counts(normalize=True).max()
+                print(f'[DEBUG] {random_guess_perf=}')
             else:
                 raise ValueError(f'Currently NOT support random_guess_perf=`None` for metric={metric_name}')
         assert isinstance(random_guess_perf, float)
-        self.random_guess_perf = random_guess_perf
+        self.random_guess_error = self._cal_error(random_guess_perf)
         # Store error_Min and speed_min per models of AG trained stack ensemble
         if ERROR not in model_perf_inftime_df:
             errors = self._cal_error(model_perf_inftime_df[PERFORMANCE])
@@ -352,7 +354,7 @@ class AGCasGoodness:
         # Main calculation logic
         model_df[ERROR_NORM] = (model_df[ERROR] - self.error_min) / self.error_min
         model_df[ERROR_NORM] = model_df[ERROR_NORM].fillna(0.0)
-        model_df[ERROR_NORM] += apply_extra_penalty_on_error(model_df[ERROR], self.metric_name, self.random_guess_perf)
+        model_df[ERROR_NORM] += apply_extra_penalty_on_error(model_df[ERROR], self.metric_name, self.random_guess_error)
         model_df[SPEED_ADJUSTED] = [adjust_speed(v, soft_cap=self.speed_soft_cap) for v in model_df[SPEED].values]
         model_df[SPEED_ADJUSTED] = model_df[SPEED_ADJUSTED] / model_df[SPEED_ADJUSTED].min() - 1
 
