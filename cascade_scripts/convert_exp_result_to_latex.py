@@ -38,7 +38,7 @@ def main(args: argparse.Namespace):
     exp_df = pd.read_csv(args.exp_result_save_path).set_index('model')
     print(exp_df[[args.perf_metric_name,'speed']])
     output = []
-    model_name_map = Model_Name_Map_MM if 'PetFinder' in args.exp_result_save_path else Model_Name_Map
+    model_name_map = Model_Name_Map_MM if '_MM' in args.exp_result_save_path else Model_Name_Map
     for mname, (mname_short, fig_label) in model_name_map.items():
         if mname not in exp_df.index:
             continue

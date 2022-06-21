@@ -292,6 +292,7 @@ def helper_get_val_data(predictor: TabularPredictor) -> Tuple[Tuple[np.ndarray, 
     For models trained with bagging strategy, 
     we no longer able to directly get val_data
     """
+    #TODO: maybe add a upper bound because 25K would be enough for hpo
     val_data = predictor.load_data_internal('val')   # Tuple[np.array, np.array] for X, Y
     is_trained_bagging = False
     if val_data[0] is None and val_data[1] is None:

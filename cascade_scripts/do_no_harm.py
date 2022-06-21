@@ -45,7 +45,7 @@ class HPOScoreFunc(Enum):
     SPEED = 'SPEED'         # maximize speed given min accuracy
 
 
-def image_id_to_path(image_id: Optional[str], image_path: str, image_path_suffix: str = ''
+def image_id_to_path(image_path: str, image_path_suffix: str, image_id: str
         ) -> Optional[str]:
     if isinstance(image_id, str):
         image_path = image_path + image_id + image_path_suffix
@@ -56,7 +56,7 @@ def image_id_to_path(image_id: Optional[str], image_path: str, image_path_suffix
     else:
         return None
 
-image_id_to_path_cpp = partial(image_id_to_path, 'datasets/cpp_research_corpora/2021_60datasets_imgs_raw/', 'jpg')
+image_id_to_path_cpp = partial(image_id_to_path, 'datasets/cpp_research_corpora/2021_60datasets_imgs_raw/', '.jpg')
 image_id_to_path_petfinder = partial(image_id_to_path, 'datasets/petfinder_processed/', '')
 
 
@@ -521,6 +521,7 @@ def main(args: argparse.Namespace):
             # currently support PetFinder or CPP
             # update several fit kwargs
             hyperparameters = get_hyperparameter_config('multimodal')
+            example_row = train_data.iloc[3]
             if dataset_name == 'PetFinder':
                 # Following tutorial, to use first image for each row
                 train_data[image_col] = train_data[image_col].apply(lambda ele: ele.split(';')[0])
@@ -537,6 +538,7 @@ def main(args: argparse.Namespace):
             fit_kwargs['hyperparameters'] = hyperparameters
             fit_kwargs['feature_metadata'] = feature_metadata
             fit_kwargs['presets'] = None
+            example_row = train_data.iloc[3]
 
         if fold_i is not None:
             model_save_path = f'{model_save_path}/fold{fold_i}'
@@ -564,7 +566,6 @@ def main(args: argparse.Namespace):
         else:
             exp_result_df = pd.DataFrame(columns=meta_cols).set_index(MODEL).dropna()
 
-        """
         # ==============
         # Infer with each single model of AG stack ensemble
         print('--------')
@@ -587,7 +588,6 @@ def main(args: argparse.Namespace):
             if model_name == best_model:
                 print(f'AG0.4 best_model {model_name}: {test_metrics} | time: {infer_times}s')
         print('--------')
-        """
 
         # ==============
         # we use egoodness function as default
