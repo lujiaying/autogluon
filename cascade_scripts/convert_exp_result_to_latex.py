@@ -58,7 +58,7 @@ def main(args: argparse.Namespace):
     exp_df = pd.read_csv(args.exp_result_save_path).set_index('model')
     print(exp_df[[args.perf_metric_name,'speed']])
     output = []
-    if '__MM' in args.exp_result_save_path:
+    if '_MM' in args.exp_result_save_path:
         model_name_map = Model_Name_Map_MM
     elif 'best_quality' in args.exp_result_save_path:
         model_name_map = Model_Name_Map_Best

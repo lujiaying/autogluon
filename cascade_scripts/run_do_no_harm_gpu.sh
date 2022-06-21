@@ -17,8 +17,9 @@ exp_name="ag-${date}_${dataset_name}_MM"
 python -m cascade_scripts.do_no_harm \
     --do_multimodal \
     --dataset_name ${dataset_name} \
+    --hpo_score_func_name ACCURACY --infer_time_limit 4e-4 \
     --exp_result_save_path ExpResults/${dataset_name}/${exp_name}.csv \
     --model_save_path AutogluonModels/${dataset_name}/ag-${date}_${dataset_name}_MultiModal
 # python -m cascade_scripts.convert_exp_result_to_latex \
 #     --exp_result_save_path ExpResults/${dataset_name}/${exp_name}.csv \
-#     --perf_metric_name accuracy
+#     --perf_metric_name roc_auc
