@@ -568,26 +568,27 @@ def main(args: argparse.Namespace):
 
         # ==============
         # Infer with each single model of AG stack ensemble
-        print('--------')
-        best_model = predictor.get_model_best()
-        best_model_members = predictor._trainer.get_minimum_model_set(best_model, include_self=False)
-        print(f'AG0.4 with best_model={best_model}--{best_model_members}:')
-        leaderboard = predictor.leaderboard(silent=True)
-        for model_name, can_infer, time_val, score_val in tqdm.tqdm(zip(leaderboard['model'], leaderboard['can_infer'], leaderboard['pred_time_val'], leaderboard['score_val']),
-                desc="Infer AG member models"):
-            if not can_infer:
-                continue
-            infer_times = []
-            for _ in range(n_repeats):
-                ts = time.time()
-                pred_proba = predictor.predict_proba(test_data, model=model_name)
-                te = time.time()
-                infer_times.append(te-ts)
-            infer_times = sum(infer_times) / len(infer_times)
-            test_metrics = append_approach_exp_result_to_df(exp_result_df, model_name, predictor, infer_times, pred_proba, test_data, label, time_val, score_val)
-            if model_name == best_model:
-                print(f'AG0.4 best_model {model_name}: {test_metrics} | time: {infer_times}s')
-        print('--------')
+        if args.exec_single_model is True:
+            print('--------')
+            best_model = predictor.get_model_best()
+            best_model_members = predictor._trainer.get_minimum_model_set(best_model, include_self=False)
+            print(f'AG0.4 with best_model={best_model}--{best_model_members}:')
+            leaderboard = predictor.leaderboard(silent=True)
+            for model_name, can_infer, time_val, score_val in tqdm.tqdm(zip(leaderboard['model'], leaderboard['can_infer'], leaderboard['pred_time_val'], leaderboard['score_val']),
+                    desc="Infer AG member models"):
+                if not can_infer:
+                    continue
+                infer_times = []
+                for _ in range(n_repeats):
+                    ts = time.time()
+                    pred_proba = predictor.predict_proba(test_data, model=model_name)
+                    te = time.time()
+                    infer_times.append(te-ts)
+                infer_times = sum(infer_times) / len(infer_times)
+                test_metrics = append_approach_exp_result_to_df(exp_result_df, model_name, predictor, infer_times, pred_proba, test_data, label, time_val, score_val)
+                if model_name == best_model:
+                    print(f'AG0.4 best_model {model_name}: {test_metrics} | time: {infer_times}s')
+            print('--------')
 
         # ==============
         # we use egoodness function as default
@@ -685,7 +686,8 @@ if __name__ == '__main__':
     parser.add_argument('--hpo_score_func_name', type=HPOScoreFunc, choices=list(HPOScoreFunc),
         default=HPOScoreFunc.GOODNESS)
     parser.add_argument('--infer_time_limit', type=float, default=None,
-            help='Required when hpo_score_func_name=="ACCURACY"')
+            help='infer time limit in seconds per row.')
+    parser.add_argument('--exec_single_model', action='store_true')
     args = parser.parse_args()
     print(f'Exp arguments: {args}')
 
