@@ -820,9 +820,19 @@ class AbstractTrainer:
                     # Jiaying: Support per-model confidence specification
                     the_threshold = model_cascade_threshold_dict[model_name]
                     if self.problem_type == BINARY:
-                        confident = (pred_proba >= the_threshold) | (pred_proba <= (1-the_threshold))
+                        if the_threshold == 1.0:
+                            # TODO: handle non proba case
+                            # Add by jiaying: threshold is for probability, th=1.0 means we never early exit at this model
+                            confident = (pred_proba > the_threshold)
+                        else:
+                            confident = (pred_proba >= the_threshold) | (pred_proba <= (1-the_threshold))
                     elif self.problem_type == MULTICLASS:
-                        confident = (pred_proba >= the_threshold).any(axis=1)
+                        if the_threshold == 1.0:
+                            # TODO: handle non proba case
+                            # Add by jiaying: threshold is for probability, th=1.0 means we never early exit at this model
+                            confident = (pred_proba > the_threshold).any(axis=1)
+                        else:
+                            confident = (pred_proba >= the_threshold).any(axis=1)
                     else:
                         raise AssertionError(f'Invalid cascade problem_type: {self.problem_type}')
                     unconfident_cur = ~confident

@@ -5,10 +5,12 @@ Date: May 19
 
 import collections.abc
 import copy
-from typing import Tuple, Optional, List
+from typing import Tuple, Optional, List, Union, Set
+from enum import Enum
 
 import numpy as np
 import pandas as pd
+from scipy.special import expit
 import openml
 
 from autogluon.tabular import TabularDataset, TabularPredictor
@@ -301,12 +303,47 @@ def helper_get_val_data(predictor: TabularPredictor) -> Tuple[Tuple[np.ndarray, 
     return val_data, is_trained_bagging
 
 
-class AGCasGoodness:
+# CascadeHpoRow = make_dataclass("CascadeHpoRow", [(MODEL, str), (PERFORMANCE, float), (PRED_TIME, float)])
+
+class HPOScoreFunc(Enum):
+    GOODNESS = 'GOODNESS'   # a metric considering both accuracy and speed
+    TIME_BOUND_PERFORMANCE = 'TIME_BOUND_PERFORMANCE'   # maximize performance given min speed/infer time limit
+    ACCURACY = 'ACCURACY'   # maximize accuracy given min speed/infer time limit; TODO: delete
+    # SPEED = 'SPEED'         # maximize speed given min accuracy
+
+class AbstractCasHpoFunc:
+    index_constraint: str = MODEL
+    columns_constraint: Set[str] = set([PERFORMANCE, PRED_TIME])
+
+    @property
+    def name(self):
+        return self.name
+
+    def validate_input_df(self, df: pd.DataFrame):
+        assert isinstance(df, pd.DataFrame)
+        if self.index_constraint != df.index.name:
+            raise ValueError(f'AbstractCasHpoFunc Class requires "{self.index_constraint}" as index')
+        if not self.columns_constraint.issubset(set(df.columns)):
+            raise ValueError(f'AbstractCasHpoFunc Class requires "{self.columns_constraint}" columns contained, but get {df.columns.to_list()}')
+
+    def call(self, model_perf_inftime_df: pd.DataFrame) -> pd.DataFrame:
+        raise ValueError('AbstractCasHpoFunc derived class must define own call() function')
+
+    def __call__(self, model_perf_inftime_df: pd.DataFrame) -> pd.DataFrame:
+        self.validate_input_df(model_perf_inftime_df)
+        # call must be implemented in derived class
+        return self.call(model_perf_inftime_df)
+
+
+class AGCasGoodness(AbstractCasHpoFunc):
+    name: str = HPOScoreFunc.GOODNESS.name
+
     def __init__(self, metric_name: str,
             model_perf_inftime_df: pd.DataFrame, val_data: Tuple[np.ndarray, np.ndarray],
             speed_soft_cap: int = 1000, weights: Tuple[float, float] = (-1.0, 0.01),
             random_guess_perf: Optional[float] = None):
         self.metric_name = metric_name   # indicates type of score_val
+        self.validate_input_df(model_perf_inftime_df)
         self.model_perf_inftime_df = model_perf_inftime_df
         self.speed_soft_cap = speed_soft_cap
         self.weights = weights
@@ -323,26 +360,38 @@ class AGCasGoodness:
                 raise ValueError(f'Currently NOT support random_guess_perf=`None` for metric={metric_name}')
         assert isinstance(random_guess_perf, float)
         self.random_guess_error = self._cal_error(random_guess_perf)
-        # Store error_Min and speed_min per models of AG trained stack ensemble
+        # Store error_min per model of AG trained stack ensemble
         if ERROR not in model_perf_inftime_df:
             errors = self._cal_error(model_perf_inftime_df[PERFORMANCE])
+            self.error_min = errors
         else:
             errors = model_perf_inftime_df[ERROR]
-        self.error_min = errors.min()
+            self.error_min = errors.min()
+        # store speed_min per model
         if SPEED not in model_perf_inftime_df:
             speeds = self._cal_speed(model_perf_inftime_df[PRED_TIME])
         else:
             speeds = model_perf_inftime_df[SPEED]
         self.speed_min = adjust_speed(speeds.min(), speed_soft_cap)
 
-    def _cal_error(self, metric_value: pd.Series) -> pd.Series:
+    def validate_input_df(self, df: pd.DataFrame):
+        # overwrite AbstractCasHpoFunc.validate_input_df()
+        assert isinstance(df, pd.DataFrame)
+        if self.index_constraint != df.index.name:
+            raise ValueError(f'AGCasGoodness Class requires "{self.index_constraint}" as index')
+        if not np.isin([self.metric_name, PERFORMANCE, ERROR], df.columns.tolist()).any():
+            raise ValueError(f'AGCasGoodness Class requires "{self.metric_name}", "{PERFORMANCE}", or "{ERROR}" columns contained, but get {df.columns.to_list()}')
+        if not np.isin([PRED_TIME, SPEED], df.columns.tolist()).any():
+            raise ValueError(f'AGCasGoodness Class requires "{PRED_TIME}" or "{SPEED}" columns contained, but get {df.columns.to_list()}')
+
+    def _cal_error(self, metric_value: Union[float, pd.Series]) -> Union[float, pd.Series]:
         assert self.metric_name in ['roc_auc', 'acc', 'accuracy']
         return 1.0 - metric_value
 
     def _cal_speed(self, pred_time: pd.Series) -> pd.Series:
         return self._val_nrows / pred_time
 
-    def __call__(self, model_perf_inftime_df: pd.DataFrame) -> pd.DataFrame:
+    def call(self, model_perf_inftime_df: pd.DataFrame) -> pd.DataFrame:
         # TODO: remove the copy() line to acclerate
         model_df = model_perf_inftime_df.copy()
         # in columns = [MODEL, PERFORMANCE, PRED_TIME]
@@ -357,7 +406,7 @@ class AGCasGoodness:
         model_df[ERROR_NORM] = model_df[ERROR_NORM].fillna(0.0)
         model_df[ERROR_NORM] += apply_extra_penalty_on_error(model_df[ERROR], self.metric_name, self.random_guess_error)
         model_df[SPEED_ADJUSTED] = [adjust_speed(v, soft_cap=self.speed_soft_cap) for v in model_df[SPEED].values]
-        model_df[SPEED_ADJUSTED] = model_df[SPEED_ADJUSTED] / model_df[SPEED_ADJUSTED].min() - 1
+        model_df[SPEED_ADJUSTED] = model_df[SPEED_ADJUSTED] / self.speed_min - 1
 
         pairs = list(zip(model_df[ERROR_NORM], model_df[SPEED_ADJUSTED]))
         scores = custom_mean(pairs, weights=self.weights)
@@ -365,17 +414,28 @@ class AGCasGoodness:
         return model_df
 
 
-class AGCasAccuracy:
+class AGCasAccuracy(AbstractCasHpoFunc):
+    name: str = HPOScoreFunc.ACCURACY.name
+
     def __init__(self, metric_name: str, infer_time_ubound: float):
         assert metric_name in ['roc_auc', 'acc', 'accuracy']
         self.metric_name = metric_name
-        self.const_penlaty = -1e4
         self.infer_time_ubound = infer_time_ubound   # the overall val time upper bound
+        # the penalty: $f(t) = \alpha * (1 + e^{-(t - \mu) / \beta}) ^ {-1}$
+        self.sigmoid_alpha = -2.0   # we will add penalty when time exceeds, assume roc, acc.
+        self.sigmoid_mu = infer_time_ubound * 1.1  # when time reach mean, penalty = scale / 2
+        # we want $f(\tau) = \alpha / 200 = -0.01$ for \tau is the uboud
+        self.sigmoid_beta = - (infer_time_ubound - self.sigmoid_mu) / np.log(199)
+        assert self.sigmoid_beta > 0
 
-    def __call__(self, model_perf_inftime_df: pd.DataFrame) -> pd.DataFrame:
+    def cal_penalty(self, t: pd.Series) -> np.ndarray:
+        return self.sigmoid_alpha * expit((t- self.sigmoid_mu) / self.sigmoid_beta)
+
+    def call(self, model_perf_inftime_df: pd.DataFrame) -> pd.DataFrame:
         model_perf_inftime_df = model_perf_inftime_df.copy()
         # TODO: may use a smooth version of penalty function
-        inftime_penalty = np.where(model_perf_inftime_df[PRED_TIME] <= self.infer_time_ubound, 0.0, self.const_penlaty)
+        # inftime_penalty = np.where(model_perf_inftime_df[PRED_TIME] <= self.infer_time_ubound, 0.0, self.const_penlaty)
+        inftime_penalty = np.where(model_perf_inftime_df[PRED_TIME] <= self.infer_time_ubound, 0.0, self.cal_penalty(model_perf_inftime_df[PRED_TIME]))
         model_perf_inftime_df[SCORE] = model_perf_inftime_df[PERFORMANCE] + inftime_penalty
         return model_perf_inftime_df
 
