@@ -520,7 +520,9 @@ def get_cascade_model_sequence_by_val_marginal_time(predictor: TabularPredictor,
         predictor.persist_models('all', max_memory=0.75)
         # print(f'before build_pwe, {model_sequence=}')
         model_seq_length = len(model_sequence)
-        for i in range(model_seq_length-1, 0, -1):
+        # example: [GBM, Cat, WE_L2], no need to build partial_we_model
+        # since WE_L2 is formed by GBM+Cat
+        for i in range(model_seq_length-3, 0, -1):
             if model_sequence[i].startswith('WeightedEnsemble'):
                 continue
             partial_model_seq = model_sequence[:i+1]
@@ -684,7 +686,9 @@ def get_cascade_model_sequence_by_greedy_search(predictor: TabularPredictor,
             print(f'[DEBUG] build_pwe_flag for {model_sequence=}')
             pwe_models_to_delete = []
             model_seq_length = len(model_sequence)
-            for i in range(model_seq_length-1, 0, -1):
+            # example: [GBM, Cat, WE_L2], no need to build partial_we_model
+            # since WE_L2 is formed by GBM+Cat
+            for i in range(model_seq_length-3, 0, -1):
                 if model_sequence[i].startswith('WeightedEnsemble'):
                     continue
                 partial_model_seq = model_sequence[:i+1]
@@ -854,7 +858,7 @@ def main(args: argparse.Namespace):
         # ==============
         # we use egoodness function as default
         # model_names = ['F2S/RAND', 'F2SP/RAND', 'F2S++/RAND', 'F2SP++/RAND', 'F2S/TPE', 'F2SP/TPE', 'F2S++/TPE', 'F2SP++/TPE', ]   
-        # model_names = ['F2SP++/TPE', 'Greedy/TPE']
+        # model_names = ['F2SP++/RAND', 'F2SP++/TPE', 'Greedy/TPE', 'Greedy++/TPE']
         model_names = ['F2SP++/TPE', 'Greedy++/TPE']
         for model_name in model_names:
             print('--------')
@@ -877,7 +881,6 @@ def main(args: argparse.Namespace):
                         greedy_search_hpo_ntrials=build_cascade_greedy_hpo_n_trails, 
                         build_pwe_flag=build_pwe_flag)
                 print(f'Get best {cascade_config_by_greedy=}')
-                # TODO: wrapup to sequence and other things
                 cascade_model_seq = list(cascade_config_by_greedy.model)
                 warmup_cascade_thresholds = [list(cascade_config_by_greedy.thresholds)]
             else:
