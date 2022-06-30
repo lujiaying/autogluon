@@ -10,13 +10,13 @@ from functools import partial, reduce
 import operator
 import itertools
 import argparse
-from dataclasses import dataclass
+from dataclasses import dataclass, asdict
 
 import pandas as pd
 import numpy as np
 from scipy.stats import norm
 from scipy.special import softmax
-from autogluon.tabular import TabularPredictor, TabularDataset, FeatureMetadata
+from autogluon.tabular import TabularPredictor, FeatureMetadata
 from autogluon.core.constants import BINARY, MULTICLASS
 from autogluon.core.metrics import accuracy, roc_auc
 from autogluon.core.data.label_cleaner import LabelCleanerMulticlassToBinary
@@ -294,6 +294,7 @@ def hpo_multi_params_TPE(predictor: TabularPredictor, cascade_model_seq: List[st
         """
         Returns a loss that we want to minimize
         """
+        global COLS_REPrt
         metric_value, infer_time = get_cascade_metric_and_time_by_threshold(val_data, cas_ts_try, 
                 cascade_model_seq, model_pred_proba_dict, model_pred_time_dict, predictor)
         cascade_try_name = 'CascadeThreshold_trial'
@@ -306,8 +307,6 @@ def hpo_multi_params_TPE(predictor: TabularPredictor, cascade_model_seq: List[st
     rng = np.random.default_rng(RANDOM_MAGIC_NUM)
     cascade_len = len(cascade_model_seq)
     problem_type = predictor._learner.problem_type
-    leaderboard = predictor.leaderboard(silent=True)
-    metric_name: str = predictor.eval_metric.name
     if problem_type == BINARY:
         ts_min = 0.5
         ts_max = 1.0
@@ -325,23 +324,6 @@ def hpo_multi_params_TPE(predictor: TabularPredictor, cascade_model_seq: List[st
                 get_models_pred_proba_on_val(predictor, list(cascade_model_all_predecessors))
     if val_data == None:
         val_data, _ = helper_get_val_data(predictor)
-    # Prepare for HPO
-    global COLS_REPrt
-    model_perf_inftime_df = leaderboard[COLS_REPrt].copy().set_index(MODEL)
-    """
-    if hpo_score_func_name == HPOScoreFunc.GOODNESS:
-        HPO_reward_func = AGCasGoodness(metric_name, model_perf_inftime_df, val_data)   # may get negative scores
-    elif hpo_score_func_name == HPOScoreFunc.ACCURACY:
-        assert infer_time_limit is not None
-        time_val_ubound = infer_time_limit * val_data[0].shape[0]
-        if verbose:
-            print(f'time_val_ubound={time_val_ubound} given infer_time_limit={infer_time_limit}')
-        # TODO: how to add prompt if infer_time_limit is IMPOSSIBLE
-        HPO_reward_func = AGCasAccuracy(metric_name, time_val_ubound)
-    else:
-        raise ValueError(f'Currently hpo_multi_params_TPE() NOT support func={hpo_score_func_name}')
-    """
-
     # start hpo process
     model_threshold_cands_dict = build_threshold_cands_dynamic(model_pred_proba_dict, problem_type)
     # warmup points define the actual warmup trials
@@ -565,24 +547,19 @@ def get_cascade_model_sequence_by_val_marginal_time(predictor: TabularPredictor,
 
 
 def get_cascade_model_sequence_by_greedy_search(predictor: TabularPredictor, 
-        hpo_score_func_name: HPOScoreFunc = HPOScoreFunc.GOODNESS,
+        hpo_reward_func: AbstractCasHpoFunc,
         greedy_search_hpo_ntrials: int = 50,
         build_pwe_flag: bool = False,
-        verbose: bool = False):
+        verbose: bool = False) -> CascadeConfig:
     """
     First accommodate with AGCasGoodness function.
     Then consider maxamize Accuracy when specifying infer_time_limit
     """
     CHOSEN_TH = 'chosen_thresholds'
+    POS_TO_ADD = 'pos_to_add'   # var for column name
     leaderboard = predictor.leaderboard(silent=True)
     model_pred_proba_dict, model_pred_time_marginal_dict, val_data = \
             get_models_pred_proba_on_val(predictor, leaderboard[MODEL].tolist())
-    if hpo_score_func_name == HPOScoreFunc.GOODNESS:
-        metric_name: str = predictor.eval_metric.name
-        model_perf_inftime_df = leaderboard[COLS_REPrt].set_index(MODEL)
-        HPO_reward_func = AGCasGoodness(metric_name, model_perf_inftime_df, val_data)   # may get negative scores
-    else:
-        raise ValueError(f'Currently get_cascade_model_sequence_by_greedy_search() NOT support hpo func={hpo_score_func_name}')
     WE_final = predictor.get_model_best()
     assert WE_final.startswith('WeightedEnsemble_L')
     model_cands: Set[str] = get_all_predecessor_model_names(predictor, WE_final)
@@ -595,16 +572,16 @@ def get_cascade_model_sequence_by_greedy_search(predictor: TabularPredictor,
     print(f'[DEBUG] Greedy Search for build cascasde sequence {WE_final=}, {model_cands=}')
     # ===== Step 1: greedy selection =====
     model_sequence = [WE_final]
-    config_list: List[CascadeConfig] = []
+    config_list: List[CascadeConfig] = []   # stores best config of different length of members
     model_slevel_dict = {m: l for m, l in zip(leaderboard[MODEL], leaderboard['stack_level'])}
     while len(model_cands) > 0:
         msequence_tried_df = []  # store potential sequence for WE_{i+1} if now is WE_{i}
-        warmup_cascade_thresholds = []
         stack_level_last_pos = {}
         for i, m in enumerate(model_sequence):
             model_slevel = model_slevel_dict[m]
             stack_level_last_pos[model_slevel] = max(i, stack_level_last_pos.get(model_slevel, 0))
         for model in model_cands:
+            warmup_cascade_thresholds = []
             # TODO: invoke different hpo_multi_params_* function
             # insert model just before WE_final, and right after last model of its layer
             msequence_try = model_sequence.copy()
@@ -620,28 +597,28 @@ def get_cascade_model_sequence_by_greedy_search(predictor: TabularPredictor,
                 prev_best_thresholds.insert(cascade_pos_to_add, 1.0)
                 warmup_cascade_thresholds = [prev_best_thresholds]
             # score_val is eval_metric score, not the HPO score
-            _, chosen_thresholds, time_val, score_val = \
-                    hpo_multi_params_TPE(predictor, msequence_try, hpo_score_func_name, 
-                            greedy_search_hpo_ntrials, must_return_cascade=True, 
-                            model_pred_proba_dict=model_pred_proba_dict, 
-                            model_pred_time_marginal_dict=model_pred_time_marginal_dict,
-                            verbose=verbose, warmup_cascade_thresholds=warmup_cascade_thresholds,
-                            is_search_space_continuous=False)
+            cascade_config = hpo_multi_params_TPE(predictor, msequence_try, hpo_reward_func, 
+                    greedy_search_hpo_ntrials, model_pred_proba_dict=model_pred_proba_dict, 
+                    model_pred_time_marginal_dict=model_pred_time_marginal_dict,
+                    verbose=verbose, warmup_cascade_thresholds=warmup_cascade_thresholds,
+                    is_search_space_continuous=False)
             # print(f'{chosen_thresholds=} for {msequence_try=}, model specify cascade={chosen_thresholds[cascade_pos_to_add]}')
-            # TODO: change to dataclass instead
-            msequence_tried_df.append([(model, chosen_thresholds[cascade_pos_to_add]), score_val, time_val, (msequence_try, chosen_thresholds)])
-        msequence_tried_df = HPO_reward_func(pd.DataFrame(msequence_tried_df, columns=COLS_REPrt+[CHOSEN_TH]).set_index(MODEL))
-        msequence_tried_df = msequence_tried_df.sort_values(by=SCORE, ascending=False)
+            tried_dict = {**asdict(cascade_config), **{POS_TO_ADD: cascade_pos_to_add}}
+            msequence_tried_df.append(tried_dict)
+        msequence_tried_df = pd.DataFrame(msequence_tried_df).sort_values(by='hpo_score', ascending=False)
+        # print(msequence_tried_df)
         best_row = msequence_tried_df.iloc[0]
-        model_to_add, model_to_add_th = best_row.name
+        pos_to_add = best_row[POS_TO_ADD]
+        model_to_add, model_to_add_th = best_row[MODEL][pos_to_add], best_row['thresholds'][pos_to_add]
         # early prune model_to_add if regarding threshold is 1.0
-        print(f'[DEBUG] Best insert ({model_to_add}, {model_to_add_th}) gets {best_row[SCORE]}. So {model_sequence} --> {best_row[CHOSEN_TH]}')
+        print(f'[DEBUG] Best insert ({model_to_add}, {model_to_add_th}) gets {best_row["hpo_score"]}. So {model_sequence} --> {best_row[[MODEL, "thresholds"]].to_list()}')
         if model_to_add_th != 1.0:
-            model_sequence = best_row[CHOSEN_TH][0]
-            cascd_config = CascadeConfig(model=tuple(model_sequence), thresholds=tuple(best_row[CHOSEN_TH][1]),
-                    pred_time_val=best_row[PRED_TIME], score_val=best_row[PERFORMANCE], hpo_score=best_row[SCORE],
-                    )
-            config_list.append(cascd_config)
+            # TODO: add logic if model_to_add_th == 0.5
+            model_sequence = list(best_row[MODEL])
+            cascade_dict = best_row.to_dict()
+            cascade_dict.pop(POS_TO_ADD)
+            cascade_config = CascadeConfig(**cascade_dict)
+            config_list.append(cascade_config)
         else:
             # model_to_add with threshold=1.0 means no gain after adding more exit points
             break
@@ -665,49 +642,69 @@ def get_cascade_model_sequence_by_greedy_search(predictor: TabularPredictor,
             prev_best_thresholds = list(config_list[-1].thresholds)
             prev_best_thresholds.pop(midx)
             warmup_cascade_thresholds = [prev_best_thresholds]
-            _, chosen_thresholds, time_val, score_val = \
-                    hpo_multi_params_TPE(predictor, msequence_try, hpo_score_func_name, 
-                            greedy_search_hpo_ntrials, must_return_cascade=True, 
-                            model_pred_proba_dict=model_pred_proba_dict, 
+            cascade_config = hpo_multi_params_TPE(predictor, msequence_try, hpo_reward_func, 
+                            greedy_search_hpo_ntrials, model_pred_proba_dict=model_pred_proba_dict, 
                             model_pred_time_marginal_dict=model_pred_time_marginal_dict,
                             verbose=verbose, warmup_cascade_thresholds=warmup_cascade_thresholds,
                             is_search_space_continuous=False)
-            msequence_tried_df.append([model, score_val, time_val, (msequence_try, chosen_thresholds)])
-        msequence_tried_df = HPO_reward_func(pd.DataFrame(msequence_tried_df, columns=COLS_REPrt+[CHOSEN_TH]).set_index(MODEL))
-        msequence_tried_df = msequence_tried_df.sort_values(by=SCORE, ascending=False)
+            tried_dict = {**asdict(cascade_config), **{POS_TO_ADD: midx}}
+            msequence_tried_df.append(tried_dict)
+        msequence_tried_df = pd.DataFrame(msequence_tried_df).sort_values(by='hpo_score', ascending=False)
+        # print(msequence_tried_df)
         best_row = msequence_tried_df.iloc[0]
-        model_to_prune = best_row.name
-        print(f'[DEBUG] remove {model_to_prune} from {model_sequence} gets {best_row[SCORE]} -> {best_row[CHOSEN_TH]}')
-        if best_row[SCORE] >= best_hpo_score:
-            model_sequence = best_row[CHOSEN_TH][0]
-            cascd_config = CascadeConfig(model=tuple(model_sequence), thresholds=tuple(best_row[CHOSEN_TH][1]),
-                    pred_time_val=best_row[PRED_TIME], score_val=best_row[PERFORMANCE], hpo_score=best_row[SCORE],
-                    )
-            config_list.append(cascd_config)
-            best_hpo_score = cascd_config.hpo_score
+        pos_to_prune = best_row[POS_TO_ADD]
+        model_to_prune = best_row[MODEL][pos_to_prune]
+        cur_hpo_score = best_row["hpo_score"]
+        print(f'[DEBUG] remove {model_to_prune} from {best_row[MODEL]} gets {cur_hpo_score} -> {best_row[[MODEL, "thresholds"]].to_list()}')
+        if cur_hpo_score >= best_hpo_score:
+            model_sequence = list(best_row[MODEL])
+            cascade_dict = best_row.to_dict()
+            cascade_dict.pop(POS_TO_ADD)
+            cascade_config = CascadeConfig(**cascade_dict)
+            config_list.append(cascade_config)
+            best_hpo_score = cascade_config.hpo_score
         else:
             break
     # ===== Step 3: try continuous threshold search on top2 cascade sequence =====
-    print(pd.DataFrame(config_list))  # DEBUG
-    topk = 2
     saved_confs_len = len(config_list)
-    for row_idx in range(saved_confs_len-1, max(saved_confs_len-1-topk, -1), -1):
-        row = config_list[row_idx]
-        print(f'[DEBUG] {row_idx=}, {row=}')
-        cascade_seq = list(row.model)
-        hpo_score = row.hpo_score
+    topk = 2
+    config_list_df = pd.DataFrame(config_list).dropna().sort_values(by='hpo_score', ascending=False)
+    best_config = CascadeConfig(**config_list_df.iloc[0].to_dict())
+    if build_pwe_flag:
+        # need to recompute pred_proba and pred_time for WE_partial built
+        model_pred_proba_dict = None
+        model_pred_time_marginal_dict = None
+    for row_idx in range(min(topk, saved_confs_len)):
+        row = config_list_df.iloc[row_idx]
+        model_sequence = list(row.model)
         thresholds = list(row.thresholds)
         warmup_cascade_thresholds = [thresholds]
-        _, chosen_thresholds, time_val, score_val = \
-                hpo_multi_params_TPE(predictor, cascade_seq, hpo_score_func_name, 
-                        greedy_search_hpo_ntrials, must_return_cascade=True, 
-                        model_pred_proba_dict=model_pred_proba_dict, 
+        # try out to replace normal cascade_seq to cascade_seq++
+        if build_pwe_flag:
+            print(f'[DEBUG] build_pwe_flag for {model_sequence=}')
+            pwe_models_to_delete = []
+            model_seq_length = len(model_sequence)
+            for i in range(model_seq_length-1, 0, -1):
+                if model_sequence[i].startswith('WeightedEnsemble'):
+                    continue
+                partial_model_seq = model_sequence[:i+1]
+                partial_we_model = get_or_build_partial_weighted_ensemble(predictor, partial_model_seq) 
+                pwe_models_to_delete.append(partial_we_model)
+                model_sequence[i] = partial_we_model
+            predictor.persist_models('all', max_memory=0.75)
+            print(f'[DEBUG] After build_pwe_flag++ {model_sequence=}')
+        cascade_config = hpo_multi_params_TPE(predictor, model_sequence, hpo_reward_func, 
+                        4*greedy_search_hpo_ntrials, model_pred_proba_dict=model_pred_proba_dict, 
                         model_pred_time_marginal_dict=model_pred_time_marginal_dict,
                         verbose=verbose, warmup_cascade_thresholds=warmup_cascade_thresholds)
-        # TODO: get HPO reward easily
-        print(f'[DEBUG]')
-    exit(0)
-    return model_sequence
+        if cascade_config.hpo_score >= best_config.hpo_score:
+            best_config = cascade_config
+        else:
+            if build_pwe_flag:
+                # clean_partial_weighted_ensembles(predictor)
+                # delete pwe that is not in best config
+                predictor.delete_models(models_to_delete=pwe_models_to_delete, dry_run=False)
+    return best_config
 
 def append_approach_exp_result_to_df(exp_result_df: pd.DataFrame, model_name: str, 
         predictor: TabularPredictor, infer_times: float, pred_proba: np.ndarray, 
@@ -723,6 +720,27 @@ def append_approach_exp_result_to_df(exp_result_df: pd.DataFrame, model_name: st
     return test_metrics
 
 
+def fit_or_load_predictor_with_infer_limit(ori_fit_kwargs: dict,
+        infer_time_limit: float, ori_label: str, 
+        ori_eval_metric: str, ori_model_save_path: str
+        ) -> TabularPredictor:
+    model_save_path = f'{ori_model_save_path}_inferLimit{infer_time_limit}'
+    if not os.path.exists(model_save_path):
+        fit_kwargs = ori_fit_kwargs.copy()
+        fit_kwargs['infer_limit'] = infer_time_limit
+        predictor = TabularPredictor(
+            label=ori_label,
+            eval_metric=ori_eval_metric,
+            path=model_save_path,
+        )
+        predictor.fit(**fit_kwargs)
+    else:
+        predictor = TabularPredictor.load(model_save_path, require_version_match=False)
+    print(f'==== Leaderboard of predictor with infer_limit={infer_time_limit}====')
+    leaderboard = predictor.leaderboard()
+    return predictor
+
+
 def main(args: argparse.Namespace):
     dataset_name = args.dataset_name
     model_save_path = args.model_save_path
@@ -736,7 +754,6 @@ def main(args: argparse.Namespace):
     hpo_score_func_name = args.hpo_score_func_name
     infer_time_limit = args.infer_time_limit
     ndigits = 4
-
     global COLS_REPrt
 
     for fold_i, n_repeats, train_data, val_data, test_data, label, image_col, eval_metric, model_hyperparameters in load_dataset(dataset_name):
@@ -787,25 +804,28 @@ def main(args: argparse.Namespace):
 
         persisted_models = predictor.persist_models('best', max_memory=0.75)
         print(f'persisted_models={persisted_models}')
-        leaderboard = predictor.leaderboard(test_data)   # This is for information displaying
-        # prepare hpo score functions for later usage
-        val_data, is_trained_bagging = helper_get_val_data(predictor)
-        if hpo_score_func_name == HPOScoreFunc.GOODNESS:
-            hpo_reward_func = AGCasGoodness(eval_metric, leaderboard[COLS_REPrt].set_index(MODEL), val_data)
-        elif hpo_score_func_name == HPOScoreFunc.ACCURACY:
-            time_val_ubound = infer_time_limit * val_data[0].shape[0]
-            hpo_reward_func = AGCasAccuracy(eval_metric, time_val_ubound)
-        else:
-            raise ValueError(f'Currently NOT support hpo_reward_func={hpo_score_func_name}')
-        
+        # leaderboard = predictor.leaderboard(test_data)   # This is for information displaying
+        leaderboard = predictor.leaderboard()
         # Load or Create Exp Result df
         if fold_i is not None:
             exp_result_save_path = exp_result_save_path.replace('.csv', f'/fold{fold_i}.csv')
         meta_cols = get_exp_df_meta_columns(predictor._learner.problem_type)
         if os.path.exists(exp_result_save_path):
-            exp_result_df = pd.read_csv(exp_result_save_path, index_col='model')
+            exp_result_df = pd.read_csv(exp_result_save_path, index_col=MODEL)
         else:
             exp_result_df = pd.DataFrame(columns=meta_cols).set_index(MODEL).dropna()
+        # prepare hpo score functions for later usage
+        val_data, is_trained_bagging = helper_get_val_data(predictor)
+        goodness_func = AGCasGoodness(eval_metric, leaderboard[COLS_REPrt].set_index(MODEL), val_data)
+        if hpo_score_func_name == HPOScoreFunc.GOODNESS:
+            hpo_reward_func = goodness_func
+        elif hpo_score_func_name == HPOScoreFunc.ACCURACY:
+            # TODO: subtract feature preprocessing time
+            time_val_ubound = infer_time_limit * val_data[0].shape[0]
+            print(f'Try to maxamize performance given time_val_ubound={time_val_ubound}, when infer_time_limit={infer_time_limit}, val_data shape={val_data[0].shape[0]}')
+            hpo_reward_func = AGCasAccuracy(eval_metric, time_val_ubound)
+        else:
+            raise ValueError(f'Currently NOT support hpo_reward_func={hpo_score_func_name}')
 
         # ==============
         # Infer with each single model of AG stack ensemble
@@ -834,8 +854,8 @@ def main(args: argparse.Namespace):
         # ==============
         # we use egoodness function as default
         # model_names = ['F2S/RAND', 'F2SP/RAND', 'F2S++/RAND', 'F2SP++/RAND', 'F2S/TPE', 'F2SP/TPE', 'F2S++/TPE', 'F2SP++/TPE', ]   
-        # model_names = ['F2SP++/TPE', 'F2SP++/RAND']
-        model_names = ['F2SP++/RAND']
+        # model_names = ['F2SP++/TPE', 'Greedy/TPE']
+        model_names = ['F2SP++/TPE', 'Greedy++/TPE']
         for model_name in model_names:
             print('--------')
             # Set up configs
@@ -850,17 +870,24 @@ def main(args: argparse.Namespace):
             # Step 1: prepare cascade
             if model_name.startswith('F2S'):
                 cascade_model_seq = get_cascade_model_sequence_by_val_marginal_time(predictor, better_than_prev=better_than_prev, build_pwe_flag=build_pwe_flag)
+                warmup_cascade_thresholds = []
             elif model_name.startswith('Greedy'):
-                cascade_model_seq = get_cascade_model_sequence_by_greedy_search(predictor, greedy_search_hpo_ntrials=build_cascade_greedy_hpo_n_trails, build_pwe_flag=build_pwe_flag)
+                cascade_config_by_greedy = get_cascade_model_sequence_by_greedy_search(predictor, 
+                        hpo_reward_func,
+                        greedy_search_hpo_ntrials=build_cascade_greedy_hpo_n_trails, 
+                        build_pwe_flag=build_pwe_flag)
+                print(f'Get best {cascade_config_by_greedy=}')
+                # TODO: wrapup to sequence and other things
+                cascade_model_seq = list(cascade_config_by_greedy.model)
+                warmup_cascade_thresholds = [list(cascade_config_by_greedy.thresholds)]
             else:
                 raise ValueError(f'Not support model_name={model_name}')
             if model_name.endswith('RAND'):
-                # TODO: change to return cascade_config
                 cascade_config = hpo_multi_params_random_search(predictor, cascade_model_seq, hpo_reward_func,
                         num_trails=hpo_search_n_trials)
             elif model_name.endswith('TPE'):
                 cascade_config = hpo_multi_params_TPE(predictor, cascade_model_seq, hpo_reward_func,
-                        num_trails=hpo_search_n_trials)
+                        num_trails=hpo_search_n_trials, warmup_cascade_thresholds=warmup_cascade_thresholds)
             else:
                 raise ValueError(f'not support {model_name=}')
             # post process in case cascade is worse than single model
@@ -903,12 +930,11 @@ def main(args: argparse.Namespace):
         # store exp_result_df into disk
         # add goodness score col after collecting all model results
         model_val_perf_inftime_df = exp_result_df[COLS_REPrt[1:]]
-        val_data, _ = helper_get_val_data(predictor)
-        goodness_func = AGCasGoodness(eval_metric, model_val_perf_inftime_df, val_data)
         model_val_perf_inftime_df = goodness_func(model_val_perf_inftime_df)
         exp_result_df.update(model_val_perf_inftime_df[[SCORE]])
         exp_result_df = exp_result_df.sort_values(by=[meta_cols[MAIN_METRIC_COL], SPEED], ascending=False)
-        print(exp_result_df.drop(columns=SPEED).round(ndigits).reset_index())
+        # print(exp_result_df.drop(columns=SPEED).round(ndigits).reset_index())
+        print(exp_result_df.round(ndigits).reset_index())
         exp_result_save_dir = os.path.dirname(exp_result_save_path)
         if not os.path.exists(exp_result_save_dir):
             os.makedirs(exp_result_save_dir)

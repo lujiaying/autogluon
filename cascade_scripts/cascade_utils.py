@@ -470,7 +470,7 @@ def load_dataset(dataset_name: str) -> tuple:
         eval_metric = 'accuracy'
         model_hyperparameters = 'default'
         n_folds = 1
-        n_repeats = 3
+        n_repeats = 2
     # Adult Income Dataset
     elif dataset_name == 'Inc':
         path_prefix = 'https://autogluon.s3.amazonaws.com/datasets/Inc/'
@@ -481,7 +481,7 @@ def load_dataset(dataset_name: str) -> tuple:
         eval_metric = 'roc_auc'
         model_hyperparameters = 'default'
         n_folds = 1
-        n_repeats = 3
+        n_repeats = 2
     # PetFinder
     elif dataset_name == 'PetFinder':
         path_prefix = 'datasets/petfinder_processed/'
@@ -494,7 +494,7 @@ def load_dataset(dataset_name: str) -> tuple:
         eval_metric = 'acc'
         model_hyperparameters = 'default'
         n_folds = 1
-        n_repeats = 3
+        n_repeats = 2
     # CPP one session
     elif dataset_name == 'CPP-6aa99d1a':
         path_prefix = 'datasets/cpp_research_corpora/2021_60datasets/6aa99d1a-1d4b-4d30-bd8b-a26f259b6482/'
@@ -505,7 +505,7 @@ def load_dataset(dataset_name: str) -> tuple:
         eval_metric = 'roc_auc'
         model_hyperparameters = 'default'
         n_folds = 1
-        n_repeats = 3
+        n_repeats = 2
     # CPP on session
     elif dataset_name == 'CPP-3564a7a7':
         path_prefix = 'datasets/cpp_research_corpora/2021_60datasets/3564a7a7-0e7c-470f-8f9e-5a029be8e616/'
@@ -516,7 +516,18 @@ def load_dataset(dataset_name: str) -> tuple:
         eval_metric = 'roc_auc'
         model_hyperparameters = 'default'
         n_folds = 1
-        n_repeats = 3
+        n_repeats = 2
+    # CPP on session
+    elif dataset_name == 'CPP-fc10f6bb':
+        path_prefix = 'datasets/cpp_research_corpora/2021_60datasets/fc10f6bb-320b-42f9-8dbb-bc589b894cce/'
+        label = 'label'
+        image_col = 'image_id'
+        path_train = path_prefix + 'train/part-00001-f911a96a-ace6-42cb-a28b-7ed785b7e2d3.c000.snappy.parquet'
+        path_test = path_prefix + 'test/part-00001-f911a96a-ace6-42cb-a28b-7ed785b7e2d3.c000.snappy.parquet'
+        eval_metric = 'roc_auc'
+        model_hyperparameters = 'default'
+        n_folds = 1
+        n_repeats = 2
     elif dataset_name.startswith('openml'):
         """
         # Datasets selected based on being able to
