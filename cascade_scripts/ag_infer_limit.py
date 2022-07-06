@@ -6,9 +6,11 @@ import os
 import argparse
 import time
 
+import tqdm
 import pandas as pd
 from autogluon.tabular import TabularPredictor, FeatureMetadata
 from autogluon.tabular.configs.hyperparameter_configs import get_hyperparameter_config
+from autogluon.core.utils.time import sample_df_for_time_func
 
 from .do_no_harm import image_id_to_path_cpp, image_id_to_path_petfinder, append_approach_exp_result_to_df
 from .cascade_utils import load_dataset, get_exp_df_meta_columns, MAIN_METRIC_COL, SPEED
@@ -84,20 +86,27 @@ def main(args):
         else:
             exp_result_df = pd.DataFrame(columns=meta_cols).set_index('model').dropna()
 
-        n_repeats = 2
+        n_repeats = 3
+        infer_limit_batch_size = 10000   # TODO: change if not default
+        test_data_sampled = sample_df_for_time_func(df=test_data, sample_size=infer_limit_batch_size)
         infer_times = []
-        for _ in range(n_repeats):
+        # infer_times is based on infer_limit_batch_size
+        for _ in tqdm.tqdm(range(n_repeats)):
             ts = time.time()
-            pred_proba = predictor.predict_proba(test_data, model=best_model)
+            predictor.predict_proba(test_data_sampled, model=best_model)
             te = time.time()
             infer_times.append(te-ts)
         infer_times = sum(infer_times) / len(infer_times)
+        print(f'DEBUG {infer_times=} for {infer_limit_batch_size=}')
+        infer_times_simulated = infer_times / len(test_data_sampled) * len(test_data)
+        print(f'DEBUG {infer_times_simulated=} for {len(test_data)=}')
         # test_metrics = predictor.evaluate_predictions(y_true=test_data[label], y_pred=pred_proba, silent=True)
         model_name = f'AG_{infer_time_limit}'
         row = leaderboard.loc[best_model]
         time_val = row['pred_time_val']
         score_val = row['score_val']
-        test_metrics = append_approach_exp_result_to_df(exp_result_df, model_name, predictor, infer_times, pred_proba, test_data, label, time_val, score_val)
+        pred_proba = predictor.predict_proba(test_data, model=best_model)
+        test_metrics = append_approach_exp_result_to_df(exp_result_df, model_name, predictor, infer_times_simulated, pred_proba, test_data, label, time_val, score_val)
         exp_result_df = exp_result_df.sort_values(by=[meta_cols[MAIN_METRIC_COL], SPEED], ascending=False)
         print(exp_result_df.round(ndigits).reset_index())
         exp_result_save_dir = os.path.dirname(exp_result_save_path)
