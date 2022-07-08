@@ -940,8 +940,6 @@ def main(args: argparse.Namespace):
             leaderboard = predictor.leaderboard(silent=True)
             for model_name, can_infer, time_val, score_val in tqdm.tqdm(zip(leaderboard['model'], leaderboard['can_infer'], leaderboard['pred_time_val'], leaderboard['score_val']),
                     desc="Infer AG member models"):
-                if model_name not in ['WeightedEnsemble_L2', 'WeightedEnsemble_L3', 'LightGBM_BAG_L1']:  #TODO: Debug
-                    continue
                 if not can_infer:
                     continue
                 infer_times = []
@@ -963,8 +961,7 @@ def main(args: argparse.Namespace):
         # we use egoodness function as default
         # model_names = ['F2S/RAND', 'F2SP/RAND', 'F2S++/RAND', 'F2SP++/RAND', 'F2S/TPE', 'F2SP/TPE', 'F2S++/TPE', 'F2SP++/TPE', ]   
         # model_names = ['F2SP++/RAND', 'F2SP++/TPE', 'Greedy/TPE', 'Greedy++/TPE']
-        # model_names = ['Greedy++/TPE']
-        model_names = []
+        model_names = ['F2SP++/TPE']
         for model_name in model_names:
             print('--------')
             # Set up configs
