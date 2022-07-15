@@ -746,11 +746,13 @@ def get_cascade_model_sequence_by_greedy_search(predictor: TabularPredictor,
         model_sequence = list(best_config.model)
         best_hpo_score = best_config.hpo_score
         print(f'best cascade config after selection: {best_config}')
+        """
         if build_pwe_flag:
             # clean up unused partial_we_models
             for m in model_sequence:
                 models_to_keep.add(m)
             predictor.delete_models(models_to_keep=list(models_to_keep), dry_run=False)
+        """
     else:
         model_sequence = []
         best_hpo_score = None
@@ -776,7 +778,7 @@ def get_cascade_model_sequence_by_greedy_search(predictor: TabularPredictor,
         pos_to_prune = best_row[POS_TO_ADD]
         model_to_prune = best_row[MODEL][pos_to_prune]
         cur_hpo_score = best_row["hpo_score"]
-        print(f'[DEBUG] remove {model_to_prune} from {best_row[MODEL]} gets {cur_hpo_score} -> {best_row[[MODEL, "thresholds"]].to_list()}')
+        print(f'[DEBUG] remove {model_to_prune} from {config_list[-1].model} gets {cur_hpo_score} -> {best_row[[MODEL, "thresholds"]].to_list()}')
         if cur_hpo_score >= best_hpo_score:
             model_sequence = list(best_row[MODEL])
             cascade_dict = best_row.to_dict()
@@ -802,6 +804,11 @@ def get_cascade_model_sequence_by_greedy_search(predictor: TabularPredictor,
                         verbose=verbose, warmup_cascade_thresholds=warmup_cascade_thresholds)
         if cascade_config.hpo_score >= best_config.hpo_score:
             best_config = cascade_config
+    # clean up unused partial_we_models
+    if build_pwe_flag:
+        for m in best_config.model:
+            models_to_keep.add(m)
+        predictor.delete_models(models_to_keep=list(models_to_keep), dry_run=False)
     return best_config
 
 def append_approach_exp_result_to_df(exp_result_df: pd.DataFrame, model_name: str, 
