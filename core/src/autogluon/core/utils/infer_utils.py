@@ -1,3 +1,9 @@
+import copy
+import time
+import numpy as np
+import pandas as pd
+
+from .time import sample_df_for_time_func
 
 
 def get_model_true_infer_speed_per_row_batch(
@@ -34,12 +40,11 @@ def get_model_true_infer_speed_per_row_batch(
             'pred_time_test_marginal' is the prediction time needed to predict for this particular model minus dependent model inference times and global preprocessing time.
         time_per_row_transform is the time in seconds per row to do the feature preprocessing.
     """
-    import copy
-    import time
-    import numpy as np
-    import pandas as pd
     data_batch = copy.deepcopy(data)
+    # TODO: check with Nick: do we want to reuse existing func?
+    data_batch = sample_df_for_time_func(data_batch, batch_size, max_sample_size=batch_size)
     len_data = len(data_batch)
+    """
     if len_data == batch_size:
         pass
     elif len_data < batch_size:
@@ -51,6 +56,7 @@ def get_model_true_infer_speed_per_row_batch(
         # sample rows
         data_batch = data_batch.sample(n=batch_size, random_state=0)
         len_data = len(data_batch)
+    """
 
     if len_data != batch_size:
         raise AssertionError(f'len(data_batch) must equal batch_size! ({len_data} != {batch_size})')
@@ -97,3 +103,4 @@ def get_model_true_infer_speed_per_row_batch(
         print(f"{round(time_per_row_transform_print, 3)}{unit} per row | transform_features")
 
     return time_per_row_df, time_per_row_transform
+
