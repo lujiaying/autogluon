@@ -103,4 +103,3 @@ def get_model_true_infer_speed_per_row_batch(
         print(f"{round(time_per_row_transform_print, 3)}{unit} per row | transform_features")
 
     return time_per_row_df, time_per_row_transform
-
