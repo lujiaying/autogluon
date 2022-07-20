@@ -5,6 +5,7 @@ Author: Jiaying Lu
 
 from codecs import namereplace_errors
 import os
+from statistics import mode
 import time
 from typing import List, Tuple, Dict, Optional, Union, Set, Callable
 from functools import partial, reduce
@@ -198,7 +199,7 @@ def get_models_pred_proba_on_val(predictor: TabularPredictor, models: List[str],
     val_data_wlabel = pd.concat([val_data[0], val_label_ori], axis=1)
     #val_data_wlabel = pd.concat(val_data, axis=1)
     time_per_row_df, _ = get_model_true_infer_speed_per_row_batch(data=val_data_wlabel, predictor=predictor, batch_size=infer_limit_batch_size,
-                                                                    repeats=n_repeats, silent=True)
+                                                                  repeats=n_repeats, silent=True)
     # not including feature transform time
     model_pred_time_marginal_dict = {m: time_per_row_df.loc[m]['pred_time_test_marginal'] * len(val_data_wlabel) for m in models}
     return model_pred_proba_dict, model_pred_time_marginal_dict, val_data
@@ -452,16 +453,26 @@ def get_or_build_partial_weighted_ensemble(predictor: TabularPredictor, base_mod
     global PWE_suffix
     name_suffix = PWE_suffix
     assert len(base_models) > 0
-    base_models_set = set(base_models)
+    # base_models_set = set(base_models)
+    # for high_quality preset or refit_full models, weighted_ensemble built from ori models
+    full_to_ori_dict = predictor.get_model_full_dict(inverse=True)
+    refit_full = True if len(full_to_ori_dict) > 0 else False
+    base_model_set = set()
+    for m in base_models:
+        if m in full_to_ori_dict:
+            base_model_set.add(full_to_ori_dict[m])
+        else:
+            base_model_set.add(m)
     for successor in predictor._trainer.model_graph.successors(base_models[0]):
         precessors = set(predictor._trainer.model_graph.predecessors(successor))
         # cond#1: precessors must be exactlly the same as base_models_set
         # cond#2: have the correct name_suffix
-        if precessors == base_models_set and successor.endswith(name_suffix):
+        if precessors == base_model_set and successor.endswith(name_suffix):
             # print(f'Retrieve pwe={successor} for {base_models}')
             return successor
     # reach here means no weighted ensemble exists for current base_models
-    successor = predictor.fit_weighted_ensemble(base_models, name_suffix=name_suffix)[0]
+    # TODO: -1 index is risky when fit_weighted_ensemble() changes
+    successor = predictor.fit_weighted_ensemble(list(base_model_set), name_suffix=name_suffix, refit_full=refit_full)[-1]
     # print(f'Fit pwe={successor} for {base_models}')
     return successor
 
@@ -514,8 +525,9 @@ def cal_we_pred_proba_and_marginal_time_from_base(predictor: TabularPredictor,
 def clean_partial_weighted_ensembles(predictor: TabularPredictor):
     global PWE_suffix
     models_to_delete = []
+    pwe_suffix_full = PWE_suffix + '_FULL'
     for model_name in predictor.get_model_names():
-        if model_name.endswith(PWE_suffix):
+        if model_name.endswith(PWE_suffix) or model_name.endswith(pwe_suffix_full):
             models_to_delete.append(model_name)
     predictor.delete_models(models_to_delete=models_to_delete, dry_run=False)
 
@@ -587,9 +599,10 @@ def get_cascade_model_sequence_by_val_marginal_time(predictor: TabularPredictor,
     val_data_wlabel = pd.concat([val_data[0], val_label_ori], axis=1)
     time_per_row_df, _ = get_model_true_infer_speed_per_row_batch(data=val_data_wlabel, predictor=predictor, batch_size=infer_limit_batch_size,
                                                                   repeats=n_repeats, silent=True)
-    time_per_row_df = time_per_row_df.loc[leaderboard['model']].reset_index()
-    leaderboard['pred_time_val'] = time_per_row_df['pred_time_test'] * len(val_data_wlabel)
-    leaderboard['pred_time_val_marginal'] = time_per_row_df['pred_time_test_marginal'] * len(val_data_wlabel)
+    leaderboard = leaderboard.set_index('model')
+    leaderboard.loc[time_per_row_df.index, 'pred_time_val'] = time_per_row_df['pred_time_test'] * len(val_data_wlabel)
+    leaderboard.loc[time_per_row_df.index, 'pred_time_val_marginal'] = time_per_row_df['pred_time_test_marginal'] * len(val_data_wlabel)
+    leaderboard = leaderboard.reset_index()
     # Rule1: from fast to slow
     # Rule2: Layer by Layer
     leaderboard_sorted = leaderboard.sort_values(['stack_level', 'pred_time_val_marginal'], ascending=[True, True])
@@ -633,12 +646,14 @@ def get_cascade_model_sequence_by_greedy_search(predictor: TabularPredictor,
     MODEL_SEQ_ORI = 'model_original'  # var for column name used by `build_pwe_flag`
     leaderboard = predictor.leaderboard(silent=True)
     models_to_keep = set(leaderboard[MODEL].tolist())
+    models_can_infer = leaderboard[leaderboard['can_infer']][MODEL].tolist()
     model_pred_proba_dict, model_pred_time_marginal_dict, val_data = \
-            get_models_pred_proba_on_val(predictor, leaderboard[MODEL].tolist(), infer_limit_batch_size)
+            get_models_pred_proba_on_val(predictor, models_can_infer, infer_limit_batch_size)
     WE_final = predictor.get_model_best()
     # WE_final = 'WeightedEnsemble_L3'  # This is for debug
     assert WE_final.startswith('WeightedEnsemble_L')
     model_cands: Set[str] = get_all_predecessor_model_names(predictor, WE_final)
+    assert model_cands.issubset(set(models_can_infer))
     max_cascade_len = len(model_cands) + 1
     # prepare dependencies of models we will use it more than one time
     model_predecessors_dict: Dict[str, Set[str]] = {}
@@ -746,13 +761,6 @@ def get_cascade_model_sequence_by_greedy_search(predictor: TabularPredictor,
         model_sequence = list(best_config.model)
         best_hpo_score = best_config.hpo_score
         print(f'best cascade config after selection: {best_config}')
-        """
-        if build_pwe_flag:
-            # clean up unused partial_we_models
-            for m in model_sequence:
-                models_to_keep.add(m)
-            predictor.delete_models(models_to_keep=list(models_to_keep), dry_run=False)
-        """
     else:
         model_sequence = []
         best_hpo_score = None
@@ -806,8 +814,11 @@ def get_cascade_model_sequence_by_greedy_search(predictor: TabularPredictor,
             best_config = cascade_config
     # clean up unused partial_we_models
     if build_pwe_flag:
+        full_to_ori_dict = predictor.get_model_full_dict(inverse=True)
         for m in best_config.model:
             models_to_keep.add(m)
+            if m.endswith('_FULL'):
+                models_to_keep.add(full_to_ori_dict[m])
         predictor.delete_models(models_to_keep=list(models_to_keep), dry_run=False)
     return best_config
 
@@ -938,20 +949,18 @@ def main(args: argparse.Namespace):
         time_per_row_df_val, time_per_row_transform_val \
              = get_model_true_infer_speed_per_row_batch(data=val_data_wlabel, predictor=predictor, batch_size=infer_limit_batch_size, 
                                                         repeats=n_repeats, silent=True)
-        time_per_row_df_val = time_per_row_df_val.loc[leaderboard['model']].reset_index()
-        leaderboard['pred_time_val'] = time_per_row_df_val['pred_time_test'] * len(val_data_wlabel)
-        leaderboard['pred_time_val_marginal'] = time_per_row_df_val['pred_time_test_marginal'] * len(val_data_wlabel)
+        # time_per_row_df_val = time_per_row_df_val.loc[leaderboard['model']].reset_index()
+        leaderboard = leaderboard.set_index('model')
+        leaderboard.loc[time_per_row_df_val.index, 'pred_time_val'] = time_per_row_df_val['pred_time_test'] * len(val_data_wlabel)
+        leaderboard.loc[time_per_row_df_val.index, 'pred_time_val_marginal'] = time_per_row_df_val['pred_time_test_marginal'] * len(val_data_wlabel)
+        leaderboard = leaderboard.reset_index()
+        print('Get genuine speed/val_time per specified infer_limit_batch_size, only for can_infer models')
         print(leaderboard)
         test_data_sampled = sample_df_for_time_func(df=test_data, sample_size=infer_limit_batch_size, 
                                                     max_sample_size=infer_limit_batch_size)
         if hpo_score_func_name == HPOScoreFunc.GOODNESS:
             hpo_reward_func = goodness_func
         elif hpo_score_func_name == HPOScoreFunc.ACCURACY:
-            # imitate default_learner.fit() to calculate feature transform time
-            # X_og = train_data
-            # X_og_1 = sample_df_for_time_func(df=X_og, sample_size=infer_limit_batch_size)
-            # infer_limit_batch_size_actual = len(X_og_1)
-            # preprocess_1_time = time_func(f=predictor.transform_features, args=[X_og_1]) / infer_limit_batch_size_actual
             preprocess_1_time = time_per_row_transform_val
             print(f'\t{preprocess_1_time}s\t= Feature Preprocessing Time (1 row | {infer_limit_batch_size} batch size)')
             infer_limit_new = infer_limit - preprocess_1_time
@@ -970,7 +979,7 @@ def main(args: argparse.Namespace):
         # Infer with each single model of AG stack ensemble
         best_model = predictor.get_model_best()
         best_model_members = predictor._trainer.get_minimum_model_set(best_model, include_self=False)
-        print(f'AG0.5 with best_model={best_model}--{best_model_members}:')
+        print(f'AG0.5 with best_model={best_model} -- {best_model_members}:')
         if args.exec_single_model is True:
             print('--------')
             time_per_row_df, _ \
@@ -993,7 +1002,7 @@ def main(args: argparse.Namespace):
         # model_names = ['F2S/RAND', 'F2SP/RAND', 'F2S++/RAND', 'F2SP++/RAND', 'F2S/TPE', 'F2SP/TPE', 'F2S++/TPE', 'F2SP++/TPE', ]   
         # model_names = ['F2SP++/RAND', 'F2SP++/TPE', 'Greedy/TPE', 'Greedy++/TPE']
         # model_names = ['F2SP++/TPE', 'Greedy++/TPE']
-        model_names = ['F2SP++/TPE', 'Greedy++/TPE']
+        model_names = ['Greedy++/TPE']
         for model_name in model_names:
             print('--------')
             # Set up configs
@@ -1010,6 +1019,7 @@ def main(args: argparse.Namespace):
                 cascade_model_seq = get_cascade_model_sequence_by_val_marginal_time(predictor, infer_limit_batch_size,
                                                                                     better_than_prev=better_than_prev, build_pwe_flag=build_pwe_flag)
                 warmup_cascade_thresholds = []
+                print(f'Get best cascade_model_seq by Fast-to-Slow: {cascade_model_seq}')
             elif model_name.startswith('Greedy'):
                 cascade_config_by_greedy = get_cascade_model_sequence_by_greedy_search(predictor, 
                         hpo_reward_func,
@@ -1017,7 +1027,7 @@ def main(args: argparse.Namespace):
                         greedy_search_hpo_ntrials=build_cascade_greedy_hpo_n_trails, 
                         build_pwe_flag=build_pwe_flag,
                         )
-                print(f'Get best {cascade_config_by_greedy=}')
+                print(f'Get best config from greedy_search: {cascade_config_by_greedy}')
                 cascade_model_seq = list(cascade_config_by_greedy.model)
                 warmup_cascade_thresholds = [list(cascade_config_by_greedy.thresholds)]
             else:

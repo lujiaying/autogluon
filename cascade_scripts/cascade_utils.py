@@ -481,7 +481,7 @@ def load_dataset(dataset_name: str) -> tuple:
         eval_metric = 'roc_auc'
         model_hyperparameters = 'default'
         n_folds = 1
-        n_repeats = 5
+        n_repeats = 3
     # PetFinder
     elif dataset_name == 'PetFinder':
         path_prefix = 'datasets/petfinder_processed/'
@@ -505,7 +505,7 @@ def load_dataset(dataset_name: str) -> tuple:
         eval_metric = 'roc_auc'
         model_hyperparameters = 'default'
         n_folds = 1
-        n_repeats = 2
+        n_repeats = 1
     # CPP on session
     elif dataset_name == 'CPP-3564a7a7':
         path_prefix = 'datasets/cpp_research_corpora/2021_60datasets/3564a7a7-0e7c-470f-8f9e-5a029be8e616/'
