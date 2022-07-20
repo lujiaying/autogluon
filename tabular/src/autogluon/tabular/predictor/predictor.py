@@ -2265,7 +2265,9 @@ class TabularPredictor:
                                                      name_suffix=name_suffix, time_limit=time_limit)
 
         if refit_full:
-            models += self.refit_full(model=models)
+            #models += self.refit_full(model=models)
+            ori_full_dict = self.refit_full(model=models)
+            models += [ori_full_dict[m] for m in models]
 
         return models
 
