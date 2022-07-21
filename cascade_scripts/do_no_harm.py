@@ -913,7 +913,6 @@ def main(args: argparse.Namespace):
             feature_metadata = feature_metadata.add_special_types({image_col: ['image_path']})
             fit_kwargs['hyperparameters'] = hyperparameters
             fit_kwargs['feature_metadata'] = feature_metadata
-            fit_kwargs['presets'] = None
 
         if fold_i is not None:
             model_save_path = f'{model_save_path}/fold{fold_i}'
