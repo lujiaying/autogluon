@@ -1038,7 +1038,7 @@ def main(args: argparse.Namespace):
         # model_names = ['F2S/RAND', 'F2SP/RAND', 'F2S++/RAND', 'F2SP++/RAND', 'F2S/TPE', 'F2SP/TPE', 'F2S++/TPE', 'F2SP++/TPE', ]   
         # model_names = ['F2SP++/RAND', 'F2SP++/TPE', 'Greedy/TPE', 'Greedy++/TPE']
         # model_names = ['F2SP++/TPE', 'Greedy++/TPE']
-        model_names = ['Greedy++/TPE']
+        model_names = ['F2SP++/TPE', 'Greedy++/TPE']
         for model_name in model_names:
             print('--------')
             # Set up configs
