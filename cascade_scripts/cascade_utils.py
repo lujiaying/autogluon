@@ -268,7 +268,7 @@ def apply_extra_penalty_on_error(model_errors: pd.Series, metric_name: str,
         elif metric_name == 'acc':
             random_guess_error = 0.5
         else:
-            raise ValueError(f'apply_extra_penalty_on_error() not support {metric_name=}')
+            raise ValueError(f'apply_extra_penalty_on_error() not support metric_name={metric_name}')
     model_penalty = model_errors / random_guess_error
     extra_penalty = constant / (model_penalty.clip(lower=1.0) - model_penalty) - constant
     return extra_penalty
@@ -355,7 +355,7 @@ class AGCasGoodness(AbstractCasHpoFunc):
                 random_guess_perf = 0.5
             elif metric_name in ['acc', 'accuracy']:
                 random_guess_perf = val_data[1].value_counts(normalize=True).max()
-                print(f'[DEBUG] {random_guess_perf=}')
+                print(f'[DEBUG] random_guess_perf={random_guess_perf}')
             else:
                 raise ValueError(f'Currently NOT support random_guess_perf=`None` for metric={metric_name}')
         assert isinstance(random_guess_perf, float)
@@ -581,7 +581,7 @@ def load_dataset(dataset_name: str) -> tuple:
         # yeild multiple folds
         # X, y, _, _ = task.get_dataset().get_data(task.target_name)
         all_data, _, _, _ = task.get_dataset().get_data()
-        print(f'{dataset_name=} {all_data.shape=}')
+        print(f'dataset_name={dataset_name} all_data.shape={all_data.shape}')
         val_data = None
         for fold_idx in range(n_folds):
             train_indices, test_indices = task.get_train_test_split_indices(repeat=0, fold=fold_idx, sample=0)
