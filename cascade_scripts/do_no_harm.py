@@ -660,7 +660,7 @@ def get_cascade_model_sequence_by_greedy_search(predictor: TabularPredictor,
     for model in model_cands:
         model_predecessors = get_all_predecessor_model_names(predictor, model)
         model_predecessors_dict[model] = model_predecessors
-    print(f'[DEBUG] Greedy Search for build cascade sequence {WE_final=}, {model_cands=}')
+    print(f'[DEBUG] Greedy Search for build cascade sequence WE_final={WE_final}, model_cands={model_cands}')
     # ===== Step 1: greedy selection =====
     model_sequence = [WE_final]
     if build_pwe_flag:
@@ -864,6 +864,43 @@ def do_infer_with_cascade_conf(
     return te-ts, pred_proba
 
 
+def fit_cascade(
+    predictor: TabularPredictor,
+    infer_time: float = None, infer_limit_batch_size: int = None, hyperparameter_cascade: Union[str, dict] = 'F2S+',
+    ) -> CascadeConfig:
+    """
+    This is pre-alpha version for final predictor.fit_cascade() API
+    See https://github.com/lujiaying/autogluon/blob/cascade_ensemble_do_no_harm_v2/cascade_scripts/tabular-cascade-tutorial.ipynb
+
+    The whole HPO is driven based on *genuine* infer speed of input `infer_limit_batch_size`
+    """
+    # set up vars
+    default_infer_limit_batch_sizee = 10000
+    n_repeats = 3
+    if infer_limit_batch_size is None:
+        infer_limit_batch_size = 10000   # use default
+
+    clean_partial_weighted_ensembles(predictor)
+    persisted_models = predictor.persist_models('all')
+    # get *genuine* speed
+    print('Original leaderboard w/o speed calibration using infer_limit_batch_size:')
+    leaderboard = predictor.leaderboard()
+    val_data, is_trained_bagging = helper_get_val_data(predictor)
+    val_label_ori = predictor.transform_labels(val_data[1], inverse=True)
+    val_data_wlabel = pd.concat([val_data[0], val_label_ori], axis=1)
+    time_per_row_df_val, time_per_row_transform_val \
+            = get_model_true_infer_speed_per_row_batch(data=val_data_wlabel, predictor=predictor, batch_size=infer_limit_batch_size, 
+                                                       repeats=n_repeats, silent=True)
+    leaderboard = leaderboard.set_index('model')
+    leaderboard.loc[time_per_row_df_val.index, 'pred_time_val'] = time_per_row_df_val['pred_time_test'] * len(val_data_wlabel)
+    leaderboard.loc[time_per_row_df_val.index, 'pred_time_val_marginal'] = time_per_row_df_val['pred_time_test_marginal'] * len(val_data_wlabel)
+    leaderboard = leaderboard.reset_index()
+    print('Get genuine speed/val_time per specified infer_limit_batch_size, only for can_infer models')
+    print(leaderboard)
+
+    # prepare hpo score functions for later usage
+    # goodness_func = AGCasGoodness(eval_metric, leaderboard[COLS_REPrt].set_index(MODEL), val_data)
+
 def main(args: argparse.Namespace):
     dataset_name = args.dataset_name
     model_save_path = args.model_save_path
@@ -1039,7 +1076,7 @@ def main(args: argparse.Namespace):
                         infer_limit_batch_size=infer_limit_batch_size,
                         num_trails=hpo_search_n_trials, warmup_cascade_thresholds=warmup_cascade_thresholds)
             else:
-                raise ValueError(f'not support {model_name=}')
+                raise ValueError(f'not support model_name={model_name}')
             # post process in case cascade is worse than single model
             cascade_config = hpo_post_process(predictor, cascade_config, hpo_reward_func)
             # Construct full name
