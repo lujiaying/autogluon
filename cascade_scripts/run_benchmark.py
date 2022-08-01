@@ -108,7 +108,11 @@ def get_cascade_config_WE_details(predictor: TabularPredictor, cascad_config: Ca
 
 def main(benchmark_result_dir: str, cascade_result_out_dir: str):
     tasks_df = get_benchmark_tasks().set_index('name')
-    hyperparameter_cascade = {'F2S+_default': asdict(F2SP_Preset())}
+    # hyperparameter_cascade = {'F2S+_default': asdict(F2SP_Preset())}
+    hyperparameter_cascade = {
+        'F2S+_default': asdict(F2SP_Preset(hpo_score_func='eval_metric')),
+        'Greedy+_default': asdict(GreedyP_Preset(hpo_score_func='eval_metric')),
+        }
     infer_limit_batch_size = 10000
     app_version = get_app_version()
     metrics_mapping = dict(
@@ -145,7 +149,7 @@ def main(benchmark_result_dir: str, cascade_result_out_dir: str):
         if not os.path.exists(model_dir_path):
             failed_folders.append(model_dir_path)
             # directly use original result_df
-            fwrite.write(result_df.to_csv())
+            fwrite.write(result_df.to_csv(index=False))
             continue
         # get task name and fold
         temp_subdirs = os.listdir(model_dir_path)
@@ -172,18 +176,20 @@ def main(benchmark_result_dir: str, cascade_result_out_dir: str):
         best_model_name = predictor.get_model_best()
         model_best_counter[best_model_name] += 1
         fit_cascade_params = {
-            'infer_limit': None,
+            'infer_limit': 1e-3,
             'infer_limit_batch_size': infer_limit_batch_size,
             'hyperparameter_cascade': hyperparameter_cascade,
         }
         train_duration_ts = time.time()
-        cascade_config = fit_cascade(predictor, **fit_cascade_params)
+        cascade_configs_dict = fit_cascade(predictor, **fit_cascade_params)
         train_duration_te = time.time()
         test_X, test_y = get_openml_test_data(task_id, int(fold))
-        infer_time, pred_probas = do_infer_with_cascade_conf(predictor, cascade_config, test_X)
-        test_metrics = predictor.evaluate_predictions(test_y, pred_probas, silent=True)
-        predict_genuine_duration = get_predict_genuine_duration(predictor, infer_limit_batch_size, pd.concat([test_X, test_y], axis=1))
-        duration_te = time.time()
+        for cascd_hyper_name, cascade_config in cascade_configs_dict.items():
+            infer_time, pred_probas = do_infer_with_cascade_conf(predictor, cascade_config, test_X)
+            test_metrics = predictor.evaluate_predictions(test_y, pred_probas, silent=True)
+            predict_genuine_duration = get_predict_genuine_duration(predictor, infer_limit_batch_size, pd.concat([test_X, test_y], axis=1))
+            duration_te = time.time()
+            print(f'{cascd_hyper_name}, {cascade_config}, {infer_time}, {test_metrics}, {predict_genuine_duration}')
         # Start replace result_df
         result_df['params'] = json.dumps(fit_cascade_params)
         result_df['version'] = ag_version
@@ -191,6 +197,7 @@ def main(benchmark_result_dir: str, cascade_result_out_dir: str):
         result_df['utc'] = utc
         result_df['duration'] = duration_te - duration_ts
         result_df['training_duration'] = train_duration_te - train_duration_ts
+        """
         result_df['predict_duration'] = infer_time
         result_df['predict_genuine_duration'] = predict_genuine_duration
         for metric_name, metric_val in test_metrics.items():
@@ -199,8 +206,10 @@ def main(benchmark_result_dir: str, cascade_result_out_dir: str):
             result_df[metrics_mapping_r[metric_name]] = metric_val
         cascade_model_predecessors_dict = get_cascade_config_WE_details(predictor, cascade_config)
         result_df['info'] = json.dumps({**asdict(cascade_config), **{'WE_predecessors_info': cascade_model_predecessors_dict}})
+        """
         # End replace result_df
-        fwrite.write(result_df.to_csv())
+        fwrite.write(result_df.to_csv(index=False))
+        exit(0)
     fwrite.close()
     print(f'model_best_counter={model_best_counter}')
     print(f'failed_folders={failed_folders}')

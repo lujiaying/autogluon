@@ -40,7 +40,7 @@ COLS_REPrt = [MODEL, PERFORMANCE, PRED_TIME]       # columns for AGCasGoodness
 RANDOM_MAGIC_NUM = 0
 CASCADE_MNAME = 'Cascade'
 DEFAULT_INFER_BATCH_SIZE = 10000
-INFER_UTIL_N_REPEATS = 1    # TODO: change when not debug
+INFER_UTIL_N_REPEATS = 2    
 
 
 @dataclass(frozen=True)
@@ -173,6 +173,9 @@ def get_cascade_metric_and_time_by_threshold(val_data: Tuple[np.ndarray, np.ndar
 def get_models_pred_proba_on_val(predictor: TabularPredictor, models: List[str],
         infer_limit_batch_size: int, leaderboard: pd.DataFrame = None,
         ) -> Tuple[Dict[str, np.ndarray], Dict[str, float], Tuple[np.ndarray, np.ndarray]]:
+    """
+    Assume input leaderboard contains genuine infer speed
+    """
     assert isinstance(infer_limit_batch_size, int)
     trainer = predictor._trainer
     # get pred_proba_dict
@@ -196,11 +199,11 @@ def get_models_pred_proba_on_val(predictor: TabularPredictor, models: List[str],
         # models Not use bagging strategy
         model_pred_proba_dict = trainer.get_model_pred_proba_dict(val_data[0], models=models)
     # get genuine infer_time
+    val_label_ori = predictor.transform_labels(val_data[1], inverse=True)
+    val_data_wlabel = pd.concat([val_data[0], val_label_ori], axis=1)
     if leaderboard is None:
         global INFER_UTIL_N_REPEATS
         n_repeats = INFER_UTIL_N_REPEATS
-        val_label_ori = predictor.transform_labels(val_data[1], inverse=True)
-        val_data_wlabel = pd.concat([val_data[0], val_label_ori], axis=1)
         time_per_row_df, _ = get_model_true_infer_speed_per_row_batch(data=val_data_wlabel, predictor=predictor, batch_size=infer_limit_batch_size,
                                                                     repeats=n_repeats, silent=True)
         # not including feature transform time
@@ -240,7 +243,6 @@ def hpo_multi_params_random_search(predictor: TabularPredictor, cascade_model_se
         hpo_reward_func: AbstractCasHpoFunc,
         infer_limit_batch_size: int,
         num_trails: int = 1000,
-        leaderboard: pd.DataFrame = None
         ) -> CascadeConfig:
     """
     Conduct a randommized search over hyperparameters
@@ -254,7 +256,7 @@ def hpo_multi_params_random_search(predictor: TabularPredictor, cascade_model_se
     # Get val pred proba
     cascade_model_all_predecessors = get_all_predecessor_model_names(predictor, cascade_model_seq, include_self=True)
     model_pred_proba_dict, model_pred_time_marginal_dict, val_data = \
-            get_models_pred_proba_on_val(predictor, list(cascade_model_all_predecessors), infer_limit_batch_size, leaderboard)
+            get_models_pred_proba_on_val(predictor, list(cascade_model_all_predecessors), infer_limit_batch_size)
     model_threshold_cands_dict = build_threshold_cands_dynamic(model_pred_proba_dict, problem_type)
     thresholds_cands = []   # (cas_len-1, variable_cand_size)
     thresholds_probs = []
@@ -684,18 +686,28 @@ def get_cascade_model_sequence_by_greedy_search(predictor: TabularPredictor,
         infer_limit_batch_size: int,
         greedy_search_hpo_ntrials: int = 50,
         build_pwe_flag: bool = False,
-        verbose: bool = False) -> CascadeConfig:
+        verbose: bool = False,
+        leaderboard: pd.DataFrame = None,
+        ) -> CascadeConfig:
     """
     First accommodate with AGCasGoodness function.
     Then consider maxamize Accuracy when specifying infer_time_limit
     """
     POS_TO_ADD = 'pos_to_add'   # var for column name
     MODEL_SEQ_ORI = 'model_original'  # var for column name used by `build_pwe_flag`
-    leaderboard = predictor.leaderboard(silent=True)
-    models_to_keep = set(leaderboard[MODEL].tolist())
-    models_can_infer = leaderboard[leaderboard['can_infer']][MODEL].tolist()
-    model_pred_proba_dict, model_pred_time_marginal_dict, val_data = \
-            get_models_pred_proba_on_val(predictor, models_can_infer, infer_limit_batch_size)
+    if leaderboard is None:
+        leaderboard = predictor.leaderboard(silent=True)
+        models_to_keep = set(leaderboard[MODEL].tolist())
+        models_can_infer = leaderboard[leaderboard['can_infer']][MODEL].tolist()
+        model_pred_proba_dict, model_pred_time_marginal_dict, val_data = \
+                get_models_pred_proba_on_val(predictor, models_can_infer, infer_limit_batch_size)
+    else:
+        # assume input leaderboard contains genuine infer speed
+        models_to_keep = set(leaderboard[MODEL].tolist())
+        models_can_infer = leaderboard[leaderboard['can_infer']][MODEL].tolist()
+        model_pred_proba_dict, model_pred_time_marginal_dict, val_data = \
+                get_models_pred_proba_on_val(predictor, models_can_infer, infer_limit_batch_size,
+                leaderboard=leaderboard)
     WE_final = predictor.get_model_best()
     assert WE_final.startswith('WeightedEnsemble_L')
     model_cands: Set[str] = get_all_predecessor_model_names(predictor, WE_final)
@@ -756,6 +768,7 @@ def get_cascade_model_sequence_by_greedy_search(predictor: TabularPredictor,
                     greedy_search_hpo_ntrials, model_pred_proba_dict=model_pred_proba_dict, 
                     model_pred_time_marginal_dict=model_pred_time_marginal_dict,
                     verbose=verbose, warmup_cascade_thresholds=warmup_cascade_thresholds,
+                    infer_limit_batch_size=infer_limit_batch_size,
                     is_search_space_continuous=False)
             # print(f'{chosen_thresholds=} for {msequence_try=}, model specify cascade={chosen_thresholds[cascade_pos_to_add]}')
             tried_dict = {**asdict(cascade_config), **{POS_TO_ADD: cascade_pos_to_add}}
@@ -823,6 +836,7 @@ def get_cascade_model_sequence_by_greedy_search(predictor: TabularPredictor,
                             greedy_search_hpo_ntrials, model_pred_proba_dict=model_pred_proba_dict, 
                             model_pred_time_marginal_dict=model_pred_time_marginal_dict,
                             verbose=verbose, warmup_cascade_thresholds=warmup_cascade_thresholds,
+                            infer_limit_batch_size=infer_limit_batch_size,
                             is_search_space_continuous=False)
             tried_dict = {**asdict(cascade_config), **{POS_TO_ADD: midx}}
             msequence_tried_df.append(tried_dict)
@@ -853,7 +867,7 @@ def get_cascade_model_sequence_by_greedy_search(predictor: TabularPredictor,
         thresholds = list(row.thresholds)
         warmup_cascade_thresholds = [thresholds]
         cascade_config = hpo_multi_params_TPE(predictor, model_sequence, hpo_reward_func, 
-                        4*greedy_search_hpo_ntrials, model_pred_proba_dict=model_pred_proba_dict, 
+                        2*greedy_search_hpo_ntrials, model_pred_proba_dict=model_pred_proba_dict, 
                         model_pred_time_marginal_dict=model_pred_time_marginal_dict,
                         verbose=verbose, warmup_cascade_thresholds=warmup_cascade_thresholds)
         if cascade_config.hpo_score >= best_config.hpo_score:
@@ -930,7 +944,7 @@ class GreedyP_Preset:
 def fit_cascade(
     predictor: TabularPredictor,
     infer_limit: float = None, infer_limit_batch_size: int = None, hyperparameter_cascade: Union[str, dict] = 'F2S+',
-    ) -> CascadeConfig:
+    ) -> Dict[str, CascadeConfig]:
     """
     This is pre-alpha version for final predictor.fit_cascade() API
     See https://github.com/lujiaying/autogluon/blob/cascade_ensemble_do_no_harm_v2/cascade_scripts/tabular-cascade-tutorial.ipynb
@@ -973,19 +987,10 @@ def fit_cascade(
         # TODO: add validation function
         _hyperparameter_cascade = hyperparameter_cascade
     
+    result = {}
     for hyper_name, hyper_conf in _hyperparameter_cascade.items():
         print(f'Now execute {hyper_name}= {hyper_conf}')
-        # Step1: construct cascade model sequence
-        if hyper_conf['cascade_algo'] == 'F2S+':
-            cascade_model_seq = get_cascade_model_sequence_by_val_marginal_time(predictor, infer_limit_batch_size,
-                    better_than_prev=True, build_pwe_flag=True, leaderboard=leaderboard)
-            warmup_cascade_thresholds = []
-            print(f'Get best cascade_model_seq by F2S+: {cascade_model_seq}')
-        elif hyper_conf['cascade_algo'] == 'Greedy+':
-            pass
-        else:
-            raise ValueError(f'Not support cascade_algo={hyper_conf["cascade_algo"]}')
-        # Step2.0: prepare hpo_score_func
+        # Step0: prepare hpo_score_func
         if hyper_conf['hpo_score_func'] == 'ag_goodness':
             hpo_reward_func = goodness_func
         elif hyper_conf['hpo_score_func'] == 'eval_metric':
@@ -1001,24 +1006,44 @@ def fit_cascade(
             print(f'Try to maxamize performance given time_val_ubound={time_val_ubound}, when infer_time_limit={infer_limit} ({infer_limit_new}), val_data shape={val_data[0].shape[0]}')
         else:
             raise ValueError(f'Not support hpo_score_func={hyper_conf["hpo_score_func"]}')
+        # Step1: construct cascade model sequence
+        if hyper_conf['cascade_algo'] == 'F2S+':
+            cascade_model_seq = get_cascade_model_sequence_by_val_marginal_time(predictor, infer_limit_batch_size,
+                    better_than_prev=True, build_pwe_flag=True, leaderboard=leaderboard)
+            warmup_cascade_thresholds = []
+            print(f'Get best cascade_model_seq by F2S+: {cascade_model_seq}')
+        elif hyper_conf['cascade_algo'] == 'Greedy+':
+            cascade_config_by_greedy = get_cascade_model_sequence_by_greedy_search(predictor, 
+                    hpo_reward_func,
+                    infer_limit_batch_size=infer_limit_batch_size,
+                    greedy_search_hpo_ntrials=hyper_conf['each_config_num_trials'], 
+                    build_pwe_flag=True,
+                    leaderboard=leaderboard)
+            print(f'Get best config from greedy_search: {cascade_config_by_greedy}')
+            cascade_model_seq = list(cascade_config_by_greedy.model)
+            warmup_cascade_thresholds = [list(cascade_config_by_greedy.thresholds)]
+        else:
+            raise ValueError(f'Not support cascade_algo={hyper_conf["cascade_algo"]}')
         # Step2: hpo for best cascade short-circuit thresholds
         if hyper_conf['searcher'] == 'Random':
             cascade_config = hpo_multi_params_random_search(predictor, cascade_model_seq, hpo_reward_func,
                     infer_limit_batch_size=infer_limit_batch_size, num_trails=hyper_conf['num_trials'],
-                    leaderboard=leaderboard)
+                    )
         elif hyper_conf['searcher'] == 'TPE':
             # TODO: add leaderboard as arg
             cascade_config = hpo_multi_params_TPE(predictor, cascade_model_seq, hpo_reward_func,
                     infer_limit_batch_size=infer_limit_batch_size,
-                    num_trails=hyper_conf['num_trials'], warmup_cascade_thresholds=warmup_cascade_thresholds)
+                    num_trails=hyper_conf['num_trials'], warmup_cascade_thresholds=warmup_cascade_thresholds,
+                    )
         else:
             raise ValueError(f'not support searcher={hyper_conf["searcher"]}')
         print(f'searcher={hyper_conf["searcher"]} gets best cascade_config={cascade_config}')
         # post process in case cascade is worse than single model
         cascade_config = hpo_post_process(predictor, cascade_config, hpo_reward_func, leaderboard)
         print(f'after post_process, cascade_config={cascade_config}')
+        result[hyper_name] = cascade_config
     #clean_partial_weighted_ensembles(predictor)
-    return cascade_config
+    return result
 
 
 def main(args: argparse.Namespace):
