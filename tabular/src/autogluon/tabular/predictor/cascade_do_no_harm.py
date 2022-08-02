@@ -50,7 +50,7 @@ class CascadeConfig:
 @dataclass(frozen=True)
 class F2SP_Preset:
     cascade_algo: str = 'F2S+'
-    num_trials: int = 1000
+    num_trials: int = 800
     searcher: str = 'TPE'
     hpo_score_func: str = 'ag_goodness'
 
@@ -58,7 +58,7 @@ class F2SP_Preset:
 @dataclass(frozen=True)
 class GreedyP_Preset:
     cascade_algo: str = 'Greedy+'
-    num_trials: int = 1000
+    num_trials: int = 500
     searcher: str = 'TPE'
     hpo_score_func: str = 'ag_goodness'
     each_config_num_trials: int = 50
@@ -761,7 +761,9 @@ def hpo_multi_params_TPE(predictor, cascade_model_seq: List[str],
         rstate=rng,
         points_to_evaluate=points_to_warmup,
         max_evals=num_trails,
-        verbose=verbose)
+        verbose=verbose,
+        show_progressbar=verbose,
+        timeout=120)
     best_thresholds = [0.0 for _ in range(cascade_len-1)]
     for k, v in best.items():
         idx = int(k.split('_')[-1])
@@ -795,6 +797,7 @@ def get_cascade_model_sequence_by_greedy_search(predictor,
     """
     POS_TO_ADD = 'pos_to_add'   # var for column name
     MODEL_SEQ_ORI = 'model_original'  # var for column name used by `build_pwe_flag`
+    problem_type = predictor._learner.problem_type
     if leaderboard is None:
         leaderboard = predictor.leaderboard(silent=True)
         models_to_keep = set(leaderboard[MODEL].tolist())
@@ -819,8 +822,14 @@ def get_cascade_model_sequence_by_greedy_search(predictor,
     for model in model_cands:
         model_predecessors = get_all_predecessor_model_names(predictor, model)
         model_predecessors_dict[model] = model_predecessors
-    print(f'[DEBUG] Greedy Search for build cascade sequence WE_final={WE_final}, model_cands={model_cands}')
+    print(f'[INFO] Greedy Search for build cascade sequence WE_final={WE_final}, model_cands={model_cands}')
     # ===== Step 1: greedy selection =====
+    patience = 0     # if threshold contains 0.0 or 0.5, patience++
+    max_patience = 2
+    if problem_type == BINARY:
+        patience_min_threshold = 0.5
+    elif problem_type == MULTICLASS:
+        patience_min_threshold = 0.0
     model_sequence = [WE_final]
     if build_pwe_flag:
         model_sequence_ori = [WE_final]
@@ -888,7 +897,7 @@ def get_cascade_model_sequence_by_greedy_search(predictor,
             model_to_add_th = best_row['thresholds'][pos_to_add] if len(best_row['thresholds']) > pos_to_add else None
         else:
             model_to_add, model_to_add_th = best_row[MODEL][pos_to_add], best_row['thresholds'][pos_to_add]
-        print(f'[DEBUG] Best insert ({model_to_add}, {model_to_add_th}) gets {best_row["hpo_score"]}. So {model_sequence} --> {best_row[[MODEL, "thresholds"]].to_list()}')
+        print(f'[INFO] Best insert ({model_to_add}, {model_to_add_th}) gets {best_row["hpo_score"]}. So {model_sequence} --> {best_row[[MODEL, "thresholds"]].to_list()}')
         # early prune model_to_add if regarding threshold is 1.0
         # TODO: add logic if model_to_add_th == 0.5
         if model_to_add_th != 1.0 or len(config_list) == 0:
@@ -901,16 +910,22 @@ def get_cascade_model_sequence_by_greedy_search(predictor,
                 cascade_dict.pop(MODEL_SEQ_ORI)
             cascade_config = CascadeConfig(**cascade_dict)
             config_list.append(cascade_config)
+            # after add one config, early prune
             if model_to_add_th == 1.0:
-                # after add one config, early prune
                 break
+            # only try max_patience times of definitelly exit on certain member
+            if patience_min_threshold in cascade_config.thresholds:
+                patience += 1
+                if patience >= max_patience:
+                    break
         else:
             # model_to_add with threshold=1.0 means no gain after adding more exit points
             # do early prune
             break
+        # reach here means going to find next best candidate to add
         if build_pwe_flag:
             model_to_add_ori = best_row[MODEL_SEQ_ORI][pos_to_add]
-            print(f'[DEBUG] {model_to_add} is built on {best_row[MODEL_SEQ_ORI][:pos_to_add+1]}')
+            print(f'[INFO] {model_to_add} is built on {best_row[MODEL_SEQ_ORI][:pos_to_add+1]}')
             model_cands.remove(model_to_add_ori)
         else:
             model_cands.remove(model_to_add)
@@ -947,7 +962,7 @@ def get_cascade_model_sequence_by_greedy_search(predictor,
         pos_to_prune = best_row[POS_TO_ADD]
         model_to_prune = best_row[MODEL][pos_to_prune]
         cur_hpo_score = best_row["hpo_score"]
-        print(f'[DEBUG] remove {model_to_prune} from {config_list[-1].model} gets {cur_hpo_score} -> {best_row[[MODEL, "thresholds"]].to_list()}')
+        print(f'[INFO] remove {model_to_prune} from {config_list[-1].model} gets {cur_hpo_score} -> {best_row[[MODEL, "thresholds"]].to_list()}')
         if cur_hpo_score >= best_hpo_score:
             model_sequence = list(best_row[MODEL])
             cascade_dict = best_row.to_dict()

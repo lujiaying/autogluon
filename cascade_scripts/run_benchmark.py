@@ -113,7 +113,7 @@ def main(benchmark_result_dir: str, cascade_result_out_dir: str):
     # hyperparameter_cascade = {'F2S+_default': asdict(F2SP_Preset())}
     #'Greedy+_default': asdict(GreedyP_Preset(hpo_score_func='eval_metric')),
     hyperparameter_cascade = {
-        'F2S+_default': asdict(F2SP_Preset(hpo_score_func='eval_metric')),
+        'Greedy+_default': asdict(GreedyP_Preset()),
         }
     infer_limit_batch_size = 10000
     app_version = get_app_version()
@@ -178,7 +178,7 @@ def main(benchmark_result_dir: str, cascade_result_out_dir: str):
         best_model_name = predictor.get_model_best()
         model_best_counter[best_model_name] += 1
         fit_cascade_params = {
-            'infer_limit': 1e-3,
+            'infer_limit': None,
             'infer_limit_batch_size': infer_limit_batch_size,
             'hyperparameter_cascade': hyperparameter_cascade,
         }
