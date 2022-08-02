@@ -534,7 +534,8 @@ class AbstractTabularLearner(AbstractLearner):
                 auxiliary_metrics_lst += [
                     'accuracy',
                     'balanced_accuracy',
-                    # 'log_loss',  # Don't include as it probably adds more confusion to novice users (can be infinite)
+                    # TODO: added by Jiaying; recover
+                    'log_loss',  # Don't include as it probably adds more confusion to novice users (can be infinite)
                     'mcc',
                 ]
             if self.problem_type == BINARY:  # binary-specific metrics

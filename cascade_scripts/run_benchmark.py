@@ -122,7 +122,7 @@ def main(benchmark_result_dir: str, cascade_result_out_dir: str):
         balacc=metrics.balanced_accuracy,
         auc=metrics.roc_auc,
         f1=metrics.f1,
-        logloss=metrics.log_loss,
+        log_loss=metrics.log_loss,
         mae=metrics.mean_absolute_error,
         mse=metrics.mean_squared_error,
         r2=metrics.r2,
