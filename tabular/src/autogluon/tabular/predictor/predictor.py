@@ -3303,7 +3303,9 @@ class TabularPredictor:
 
             hpo_score_func: str, default='ag_goodness'
                 Valid values are: ['ag_goodness', 'eval_metric'].
-                'ag_goodness' is a AutoGluon pre-defined weighted sum score of eval_metric and inference throughput, with practise-based penalty that pushes the built cascade model to achieve strong (penalize severaly when eval_metric is close to random guess) and fast (penalize if cascade is too fast to focus more on eval_metric) performance for real-life application. 'eval_metric' is a score function that maxmize eval_metric within specified `infer_limit`.
+                'ag_goodness' is a AutoGluon pre-defined weighted sum score of eval_metric and inference throughput, with practise-based penalty that pushes the built cascade model to achieve strong (penalize severaly when eval_metric is close to random guess) and fast (penalize if cascade is too fast to focus more on eval_metric) performance for real-life application. 
+                'eval_metric' is a score function that maxmize eval_metric within specified `infer_limit`.
+                !! hpo_score_func will be overwritten into 'eval_metric' when `infer_limit` is specified.
 
             each_config_num_trials: int, default=50
                 Currently only supported in 'Greedy+'. Greedy search cascade build algorithm involves a series of hpo trials for each configure during search process. This argument determine the number of trails to run for each configure. Recommed set a number less than 80 for reasonble duration.
@@ -3367,9 +3369,7 @@ class TabularPredictor:
         for hyper_name, hyper_conf in _hyperparameter_cascade.items():
             print(f'Now execute {hyper_name}= {hyper_conf}')
             # Step0: prepare hpo_score_func
-            if hyper_conf['hpo_score_func'] == 'ag_goodness':
-                hpo_reward_func = goodness_func
-            elif hyper_conf['hpo_score_func'] == 'eval_metric':
+            if infer_limit is not None or hyper_conf['hpo_score_func'] == 'eval_metric':
                 preprocess_1_time = time_per_row_transform_val
                 print(f'\t{preprocess_1_time}s\t= Feature Preprocessing Time (1 row | {infer_limit_batch_size} batch size)')
                 infer_limit_new = infer_limit - preprocess_1_time
@@ -3380,6 +3380,8 @@ class TabularPredictor:
                 time_val_ubound = infer_limit_new * val_data[0].shape[0]
                 hpo_reward_func = AGCasAccuracy(eval_metric, time_val_ubound)
                 print(f'Try to maxamize performance given time_val_ubound={time_val_ubound}, when infer_time_limit={infer_limit} ({infer_limit_new}), val_data shape={val_data[0].shape[0]}')
+            elif hyper_conf['hpo_score_func'] == 'ag_goodness':
+                hpo_reward_func = goodness_func
             else:
                 raise ValueError(f'Not support hpo_score_func={hyper_conf["hpo_score_func"]}')
             # Step1: construct cascade model sequence
