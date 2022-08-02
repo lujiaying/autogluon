@@ -110,10 +110,10 @@ def get_cascade_config_WE_details(predictor: TabularPredictor, cascad_config: Ca
 
 def main(benchmark_result_dir: str, cascade_result_out_dir: str):
     tasks_df = get_benchmark_tasks().set_index('name')
-    # hyperparameter_cascade = {'F2S+_default': asdict(F2SP_Preset())}
     #'Greedy+_default': asdict(GreedyP_Preset(hpo_score_func='eval_metric')),
+    #'F2S+_default': asdict(F2SP_Preset()),
     hyperparameter_cascade = {
-        'Greedy+_default': asdict(GreedyP_Preset()),
+        'F2S+_default': asdict(F2SP_Preset()),
         }
     infer_limit_batch_size = 10000
     app_version = get_app_version()
@@ -145,6 +145,12 @@ def main(benchmark_result_dir: str, cascade_result_out_dir: str):
             continue
         if ec2_dir_name in ['scores', 'logs']:
             continue
+        # debug purpose
+        #if ec2_dir_name != 'aws.ag.1h8c_gp3.car.2.agv053_jul30_high':
+        if ec2_dir_name != 'aws.ag.1h8c_gp3.dionis.6.agv053_jul30_high':   # no WE_L2
+            continue
+        print(f'current is at {ec2_dir_name}')
+        # debug Done
         result_path = os.path.join(ec2_dir_path, 'output', 'results.csv')
         result_df = pd.read_csv(result_path)
         model_dir_path = os.path.join(ec2_dir_path, 'output', 'models')

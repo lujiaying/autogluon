@@ -13,7 +13,7 @@ from scipy.special import expit
 from scipy.stats import norm
 from scipy.special import softmax
 from autogluon.core.constants import BINARY, MULTICLASS
-from autogluon.core.metrics import accuracy, roc_auc
+from autogluon.core.metrics import accuracy, roc_auc, log_loss
 from autogluon.core.utils.infer_utils import get_model_true_infer_speed_per_row_batch
 
 
@@ -26,7 +26,7 @@ SPEED = 'speed'
 SPEED_ADJUSTED = 'speed_adjusted'
 PRED_TIME = 'pred_time_val'
 PERFORMANCE = 'score_val'
-METRIC_FUNC_MAP = {'accuracy': accuracy, 'acc': accuracy, 'roc_auc': roc_auc}
+METRIC_FUNC_MAP = {'accuracy': accuracy, 'acc': accuracy, 'roc_auc': roc_auc, 'log_loss': log_loss}
 THRESHOLDS_BINARY = [0.5, 0.6, 0.7, 0.8, 0.85, 0.9, 0.93, 0.95, 0.97, 1.0]
 THRESHOLDS_MULTICLASS = [0.0, 0.2, 0.4, 0.5, 0.6, 0.75, 0.8, 0.85, 0.9, 0.95, 1.0]
 PWE_suffix = '_PWECascade'
@@ -171,7 +171,12 @@ class AGCasGoodness(AbstractCasHpoFunc):
                 random_guess_perf = 0.5
             elif metric_name in ['acc', 'accuracy']:
                 random_guess_perf = val_data[1].value_counts(normalize=True).max()
-                print(f'[DEBUG] random_guess_perf={random_guess_perf}')
+                # print(f'[DEBUG] random_guess_perf={random_guess_perf} when metric_name={metric_name}')
+            elif metric_name in ['log_loss', 'nll']:
+                most_freq_class_label = val_data[1].value_counts()[:1].index.item()
+                y_pred = np.full(len(val_data[1]), most_freq_class_label)
+                random_guess_perf = log_loss(val_data[1], y_pred)
+                print(f'[DEBUG] random_guess_perf={random_guess_perf} when metric_name={metric_name}')
             else:
                 raise ValueError(f'Currently NOT support random_guess_perf=`None` for metric={metric_name}')
         assert isinstance(random_guess_perf, float)
@@ -201,8 +206,11 @@ class AGCasGoodness(AbstractCasHpoFunc):
             raise ValueError(f'AGCasGoodness Class requires "{PRED_TIME}" or "{SPEED}" columns contained, but get {df.columns.to_list()}')
 
     def _cal_error(self, metric_value: Union[float, pd.Series]) -> Union[float, pd.Series]:
-        assert self.metric_name in ['roc_auc', 'acc', 'accuracy']
-        return 1.0 - metric_value
+        assert self.metric_name in ['roc_auc', 'acc', 'accuracy', 'log_loss', 'nll']
+        if self.metric_name in ['roc_auc', 'acc', 'accuracy']:
+            return 1.0 - metric_value
+        elif self.metric_name in ['log_loss', 'nll']:
+            return -metric_value
 
     def _cal_speed(self, pred_time: pd.Series) -> pd.Series:
         return self._val_nrows / pred_time
@@ -359,6 +367,18 @@ def translate_cascade_sequence_to_WE_version(model_sequence: List[str], predicto
     return ret_model_sequence
 
 
+def ensure_contain_weighted_ensemble(predictor):
+    leaderboard = predictor.leaderboard(silent=True)
+    model_last = get_model_last(leaderboard)
+    if not model_last.startswith('WeightedEnsemble'):
+        # manually train a new one
+        global PWE_suffix
+        name_suffix = PWE_suffix
+        full_to_ori_dict = predictor.get_model_full_dict(inverse=True)
+        refit_full = True if len(full_to_ori_dict) > 0 else False
+        predictor.fit_weighted_ensemble(name_suffix=name_suffix, refit_full=refit_full)
+
+
 def get_cascade_model_sequence_by_val_marginal_time(predictor,
                                                     infer_limit_batch_size: int,
                                                     are_member_of_best: bool = True,
@@ -392,7 +412,7 @@ def get_cascade_model_sequence_by_val_marginal_time(predictor,
     else:
         leaderboard = leaderboard.copy()
     # we have to use last model instead of best model
-    best_model_name = leaderboard[leaderboard['fit_order'] == leaderboard['fit_order'].max()]['model'].item()
+    best_model_name = get_model_last(leaderboard)
     # best_model_name = predictor.get_model_best()
     if not best_model_name.startswith('WeightedEnsemble_L'):
         # best model NOT contain model member as candidates for cascade sequence
@@ -783,6 +803,14 @@ def hpo_multi_params_TPE(predictor, cascade_model_seq: List[str],
     return cascade_config
 
 
+def get_model_last(leaderboard: pd.DataFrame) -> str:
+    """
+    Get last fitted model name
+    """
+    model_last = leaderboard[leaderboard['fit_order'] == leaderboard['fit_order'].max()]['model'].item()
+    return model_last
+
+
 def get_cascade_model_sequence_by_greedy_search(predictor,
         hpo_reward_func: AbstractCasHpoFunc,
         infer_limit_batch_size: int,
@@ -812,7 +840,7 @@ def get_cascade_model_sequence_by_greedy_search(predictor,
                 get_models_pred_proba_on_val(predictor, models_can_infer, infer_limit_batch_size,
                 leaderboard=leaderboard)
     # WE_final = predictor.get_model_best()
-    WE_final = leaderboard[leaderboard['fit_order'] == leaderboard['fit_order'].max()]['model'].item()
+    WE_final = get_model_last(leaderboard)
     assert WE_final.startswith('WeightedEnsemble_L')
     model_cands: Set[str] = get_all_predecessor_model_names(predictor, WE_final)
     assert model_cands.issubset(set(models_can_infer))

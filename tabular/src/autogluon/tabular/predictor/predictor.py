@@ -3323,7 +3323,7 @@ class TabularPredictor:
         from dataclasses import asdict
         from .cascade_do_no_harm import INFER_UTIL_N_REPEATS, MODEL, COLS_REPrt
         from .cascade_do_no_harm import AGCasGoodness, AGCasAccuracy, F2SP_Preset, GreedyP_Preset
-        from .cascade_do_no_harm import clean_partial_weighted_ensembles, helper_get_val_data, hpo_post_process
+        from .cascade_do_no_harm import clean_partial_weighted_ensembles, helper_get_val_data, hpo_post_process, ensure_contain_weighted_ensemble
         from .cascade_do_no_harm import get_cascade_model_sequence_by_val_marginal_time, get_cascade_model_sequence_by_greedy_search
         from .cascade_do_no_harm import hpo_multi_params_random_search, hpo_multi_params_TPE
         from autogluon.core.utils.infer_utils import get_model_true_infer_speed_per_row_batch
@@ -3334,6 +3334,7 @@ class TabularPredictor:
         
         clean_partial_weighted_ensembles(self)
         persisted_models = self.persist_models('all')
+        ensure_contain_weighted_ensemble(self)
         # get *genuine* speed
         print('Original leaderboard w/o speed calibration using infer_limit_batch_size:')
         leaderboard = self.leaderboard()
