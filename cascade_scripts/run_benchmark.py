@@ -109,9 +109,9 @@ def get_cascade_config_WE_details(predictor: TabularPredictor, cascad_config: Ca
 def main(benchmark_result_dir: str, cascade_result_out_dir: str):
     tasks_df = get_benchmark_tasks().set_index('name')
     # hyperparameter_cascade = {'F2S+_default': asdict(F2SP_Preset())}
+    #'Greedy+_default': asdict(GreedyP_Preset(hpo_score_func='eval_metric')),
     hyperparameter_cascade = {
         'F2S+_default': asdict(F2SP_Preset(hpo_score_func='eval_metric')),
-        'Greedy+_default': asdict(GreedyP_Preset(hpo_score_func='eval_metric')),
         }
     infer_limit_batch_size = 10000
     app_version = get_app_version()
@@ -181,11 +181,11 @@ def main(benchmark_result_dir: str, cascade_result_out_dir: str):
             'hyperparameter_cascade': hyperparameter_cascade,
         }
         train_duration_ts = time.time()
-        cascade_configs_dict = fit_cascade(predictor, **fit_cascade_params)
+        cascade_configs_dict = predictor.fit_cascade(**fit_cascade_params)
         train_duration_te = time.time()
         test_X, test_y = get_openml_test_data(task_id, int(fold))
         for cascd_hyper_name, cascade_config in cascade_configs_dict.items():
-            infer_time, pred_probas = do_infer_with_cascade_conf(predictor, cascade_config, test_X)
+            infer_time, pred_probas = predictor.do_infer_with_cascade_conf(cascade_config, test_X)
             test_metrics = predictor.evaluate_predictions(test_y, pred_probas, silent=True)
             predict_genuine_duration = get_predict_genuine_duration(predictor, infer_limit_batch_size, pd.concat([test_X, test_y], axis=1))
             duration_te = time.time()

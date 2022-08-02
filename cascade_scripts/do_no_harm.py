@@ -954,9 +954,9 @@ def fit_cascade(
     # set up vars
     global INFER_UTIL_N_REPEATS
     n_repeats = INFER_UTIL_N_REPEATS    # TODO: remember to reset global INFER_UTIL_N_REPEATS
-    default_infer_limit_batch_sizee = 10000
+    default_infer_limit_batch_size = 10000
     if infer_limit_batch_size is None:
-        infer_limit_batch_size = 10000   # use default
+        infer_limit_batch_size = default_infer_limit_batch_size   # use default
 
     clean_partial_weighted_ensembles(predictor)
     persisted_models = predictor.persist_models('all')
@@ -986,6 +986,9 @@ def fit_cascade(
     else:
         # TODO: add validation function
         _hyperparameter_cascade = hyperparameter_cascade
+        # currently only support run one cascade algorithm one time
+        # because we will clean up fitted WE models afterwards
+        assert len(_hyperparameter_cascade) == 1
     
     result = {}
     for hyper_name, hyper_conf in _hyperparameter_cascade.items():

@@ -5,7 +5,7 @@ import math
 import os
 import pprint
 import time
-from typing import Union
+from typing import Union, Dict, Tuple
 
 import networkx as nx
 import numpy as np
@@ -31,6 +31,7 @@ from autogluon.core.utils.loaders import load_pkl, load_str
 from autogluon.core.utils.savers import save_pkl, save_str
 from autogluon.core.utils.utils import default_holdout_frac
 
+from .cascade_do_no_harm import CascadeConfig
 from ..configs.feature_generator_presets import get_default_feature_generator
 from ..configs.hyperparameter_configs import get_hyperparameter_config
 from ..configs.presets_configs import tabular_presets_dict, tabular_presets_alias
@@ -3266,6 +3267,185 @@ class TabularPredictor:
             else:
                 error_message = f"{error_message} `.{message_suffix}`."
             raise AssertionError(error_message)
+
+    # =======
+    # Start Cascade Related Scripts
+    def fit_cascade(self, infer_limit: float = None, infer_limit_batch_size: int = None, 
+                    hyperparameter_cascade: Union[str, dict] = 'F2S+') -> Dict[str, CascadeConfig]:
+        """
+        infer_limit: float, default = None
+        The inference time limit in seconds per row to achieve. This is not gurantee because.
+
+    infer_limit_batch_size: int, default = None
+        The batch size to use when predicting in bulk to estimate per-row inference time. Must be an integer greater than 0. If None and infer_limit is specified, will default to 10000.
+
+    hyperparameter_cascade: str or dict, default = 'F2S+'
+        Specifies which cascade algorithms to use and what hyperparameter-values to use for them.
+        Valid str options: ['F2S+', 'Greedy+']. 
+            'F2S+' denotes Fast-to-Slow Plus algorithm, where model in cascade is ordered by *pred_time_val_marginal*. 
+            'Greedy+' denotes Greedy Search algorithm, where the cascade model sequence is determined by a greedy search process.
+            It is worth noting that '+' denotes that each model member is replaced by a newly fitted weighted_ensemble model of the trained model and its precedents, e.g. ['KNN', 'Cat', 'RF', 'NN', 'WE_L2'] -> ['KNN', 'WE_L2-KNN_Cat', 'WE_L2-KNN_Cat_RF', 'WE_L2-KNN_Cat_RF_NN', 'WE_L2']. 
+
+        If set to 'F2S+', will use: 
+        {
+            'F2S+_default': {'num_trials': 1000, 'searcher': 'TPE', 'hpo_score_func': 'ag_goodness'}
+        }
+        If set to 'Greedy+', will use:
+        {
+            'Greedy+_default': {'num_trials': 1000, 'searcher': 'TPE', 'hpo_score_func': 'ag_goodness', 'each_config_num_trials': 50}
+        }
+        Details regarding the hyperparameters you can specify for each cascade algorithm:
+            num_trials: int, default=1000
+                HPO maximum trials to find optimal cascade short-circuit thresholds.
+
+            searcher: str, default='TPE'
+                Valid values are: ['TPE', 'Random'].
+
+            hpo_score_func: str, default='ag_goodness'
+                Valid values are: ['ag_goodness', 'eval_metric'].
+                'ag_goodness' is a AutoGluon pre-defined weighted sum score of eval_metric and inference throughput, with practise-based penalty that pushes the built cascade model to achieve strong (penalize severaly when eval_metric is close to random guess) and fast (penalize if cascade is too fast to focus more on eval_metric) performance for real-life application. 'eval_metric' is a score function that maxmize eval_metric within specified `infer_limit`.
+
+            each_config_num_trials: int, default=50
+                Currently only supported in 'Greedy+'. Greedy search cascade build algorithm involves a series of hpo trials for each configure during search process. This argument determine the number of trails to run for each configure. Recommed set a number less than 80 for reasonble duration.
+
+        Users can specify these hyperparameters to satisfy their own constraints. e.g.:
+        {
+            'F2S+': {'num_trials': 300},
+            'Greedy+': {'hpo_score_func': 'eval_metric'},
+        }
+        The above input hyperparamters would execute both 'F2S+' and 'Greedy+' cascade algorithms. Unspecified arguments would be set to default values.
+
+    Returns: CascadeConfig
+        A custom class that carries all necessary information of a built cascade.
+        """
+        from dataclasses import asdict
+        from .cascade_do_no_harm import INFER_UTIL_N_REPEATS, MODEL, COLS_REPrt
+        from .cascade_do_no_harm import AGCasGoodness, AGCasAccuracy, F2SP_Preset, GreedyP_Preset
+        from .cascade_do_no_harm import clean_partial_weighted_ensembles, helper_get_val_data, hpo_post_process
+        from .cascade_do_no_harm import get_cascade_model_sequence_by_val_marginal_time, get_cascade_model_sequence_by_greedy_search
+        from .cascade_do_no_harm import hpo_multi_params_random_search, hpo_multi_params_TPE
+        from autogluon.core.utils.infer_utils import get_model_true_infer_speed_per_row_batch
+        # set up vars
+        n_repeats = INFER_UTIL_N_REPEATS 
+        if infer_limit_batch_size is None:
+            infer_limit_batch_size = 10000  # use default
+        
+        clean_partial_weighted_ensembles(self)
+        persisted_models = self.persist_models('all')
+        # get *genuine* speed
+        print('Original leaderboard w/o speed calibration using infer_limit_batch_size:')
+        leaderboard = self.leaderboard()
+        val_data, is_trained_bagging = helper_get_val_data(self)
+        val_label_ori = self.transform_labels(val_data[1], inverse=True)
+        val_data_wlabel = pd.concat([val_data[0], val_label_ori], axis=1)
+        time_per_row_df_val, time_per_row_transform_val \
+                = get_model_true_infer_speed_per_row_batch(data=val_data_wlabel, predictor=self, batch_size=infer_limit_batch_size, 
+                                                           repeats=n_repeats, silent=True)
+        leaderboard = leaderboard.set_index(MODEL)
+        leaderboard.loc[time_per_row_df_val.index, 'pred_time_val'] = time_per_row_df_val['pred_time_test'] * len(val_data_wlabel)
+        leaderboard.loc[time_per_row_df_val.index, 'pred_time_val_marginal'] = time_per_row_df_val['pred_time_test_marginal'] * len(val_data_wlabel)
+        leaderboard = leaderboard.reset_index()
+        print('Get genuine speed/val_time per specified infer_limit_batch_size, only for can_infer models')
+        print(leaderboard)
+        # prepare hpo score functions for later usage
+        eval_metric = self.eval_metric.name
+        goodness_func = AGCasGoodness(eval_metric, leaderboard[COLS_REPrt].set_index(MODEL), val_data)
+
+        if hyperparameter_cascade == 'F2S+':
+            _hyperparameter_cascade = {'F2S+_default': asdict(F2SP_Preset())}
+        elif hyperparameter_cascade == 'Greedy+':
+            _hyperparameter_cascade = {'Greedy+_default': asdict(GreedyP_Preset())}
+        else:
+            # TODO: add validation function
+            _hyperparameter_cascade = hyperparameter_cascade
+            # currently only support run one cascade algorithm one time
+            # because we will clean up fitted WE models afterwards
+            assert len(_hyperparameter_cascade) == 1
+
+        result = {}
+        for hyper_name, hyper_conf in _hyperparameter_cascade.items():
+            print(f'Now execute {hyper_name}= {hyper_conf}')
+            # Step0: prepare hpo_score_func
+            if hyper_conf['hpo_score_func'] == 'ag_goodness':
+                hpo_reward_func = goodness_func
+            elif hyper_conf['hpo_score_func'] == 'eval_metric':
+                preprocess_1_time = time_per_row_transform_val
+                print(f'\t{preprocess_1_time}s\t= Feature Preprocessing Time (1 row | {infer_limit_batch_size} batch size)')
+                infer_limit_new = infer_limit - preprocess_1_time
+                print(f'\t\tFeature Preprocessing requires {round(preprocess_1_time/infer_limit*100, 2)}% '
+                      f'of the overall inference constraint ({infer_limit}s)\n'
+                      f'\t\t{infer_limit_new}s inference time budget remaining for models...')
+                # upper bound is defined for specific infer_limit_batch_size
+                time_val_ubound = infer_limit_new * val_data[0].shape[0]
+                hpo_reward_func = AGCasAccuracy(eval_metric, time_val_ubound)
+                print(f'Try to maxamize performance given time_val_ubound={time_val_ubound}, when infer_time_limit={infer_limit} ({infer_limit_new}), val_data shape={val_data[0].shape[0]}')
+            else:
+                raise ValueError(f'Not support hpo_score_func={hyper_conf["hpo_score_func"]}')
+            # Step1: construct cascade model sequence
+            if hyper_conf['cascade_algo'] == 'F2S+':
+                cascade_model_seq = get_cascade_model_sequence_by_val_marginal_time(self, infer_limit_batch_size,
+                        better_than_prev=True, build_pwe_flag=True, leaderboard=leaderboard)
+                warmup_cascade_thresholds = []
+                print(f'Get best cascade_model_seq by F2S+: {cascade_model_seq}')
+            elif hyper_conf['cascade_algo'] == 'Greedy+':
+                cascade_config_by_greedy = get_cascade_model_sequence_by_greedy_search(self, 
+                        hpo_reward_func,
+                        infer_limit_batch_size=infer_limit_batch_size,
+                        greedy_search_hpo_ntrials=hyper_conf['each_config_num_trials'], 
+                        build_pwe_flag=True,
+                        leaderboard=leaderboard)
+                print(f'Get best config from greedy_search: {cascade_config_by_greedy}')
+                cascade_model_seq = list(cascade_config_by_greedy.model)
+                warmup_cascade_thresholds = [list(cascade_config_by_greedy.thresholds)]
+            else:
+                raise ValueError(f'Not support cascade_algo={hyper_conf["cascade_algo"]}')
+            # Step2: hpo for best cascade short-circuit thresholds
+            if hyper_conf['searcher'] == 'Random':
+                cascade_config = hpo_multi_params_random_search(self, cascade_model_seq, hpo_reward_func,
+                        infer_limit_batch_size=infer_limit_batch_size, num_trails=hyper_conf['num_trials'],
+                        )
+            elif hyper_conf['searcher'] == 'TPE':
+                # TODO: add leaderboard as arg
+                cascade_config = hpo_multi_params_TPE(self, cascade_model_seq, hpo_reward_func,
+                        infer_limit_batch_size=infer_limit_batch_size,
+                        num_trails=hyper_conf['num_trials'], warmup_cascade_thresholds=warmup_cascade_thresholds,
+                        )
+            else:
+                raise ValueError(f'not support searcher={hyper_conf["searcher"]}')
+            print(f'searcher={hyper_conf["searcher"]} gets best cascade_config={cascade_config}')
+            # post process in case cascade is worse than single model
+            cascade_config = hpo_post_process(self, cascade_config, hpo_reward_func, leaderboard)
+            print(f'after post_process, cascade_config={cascade_config}')
+            result[hyper_name] = cascade_config
+        #clean_partial_weighted_ensembles(predictor)
+        return result
+
+    def do_infer_with_cascade_conf(
+            self,
+            cascade_config: CascadeConfig,
+            test_data_sampled: pd.DataFrame,
+            ) -> Tuple[float, np.ndarray]:
+        if len(cascade_config.model) > 1:
+            cascade_model_seq = list(cascade_config.model)
+            ts = time.time()
+            learner = self._learner
+            trainer = self._trainer
+            test_data_X = learner.transform_features(test_data_sampled)
+            model_pred_proba_dict = trainer.get_model_pred_proba_dict(
+                    test_data_X, cascade_model_seq, fit=False,
+                    cascade=True, cascade_threshold=list(cascade_config.thresholds),
+                    )
+            pred_proba = model_pred_proba_dict[cascade_model_seq[-1]]
+            if learner.problem_type == BINARY:
+                pred_proba = LabelCleanerMulticlassToBinary.convert_binary_proba_to_multiclass_proba(pred_proba)
+            te = time.time()
+        else:
+            ts = time.time()
+            pred_proba = self.predict_proba(test_data_sampled, model=cascade_config.model[0])
+            te = time.time()
+        return te-ts, pred_proba
+    # End Cascade Related Scripts
+    # =======
 
 # Location to store WIP functionality that will be later added to TabularPredictor
 class _TabularPredictorExperimental(TabularPredictor):
