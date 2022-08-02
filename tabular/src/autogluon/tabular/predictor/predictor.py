@@ -3346,7 +3346,8 @@ class TabularPredictor:
         leaderboard.loc[time_per_row_df_val.index, 'pred_time_val_marginal'] = time_per_row_df_val['pred_time_test_marginal'] * len(val_data_wlabel)
         leaderboard = leaderboard.reset_index()
         print('Get genuine speed/val_time per specified infer_limit_batch_size, only for can_infer models')
-        print(leaderboard)
+        with pd.option_context('display.max_rows', None, 'display.max_columns', None, 'display.width', 1000):
+            print(leaderboard)
         # prepare hpo score functions for later usage
         eval_metric = self.eval_metric.name
         goodness_func = AGCasGoodness(eval_metric, leaderboard[COLS_REPrt].set_index(MODEL), val_data)
@@ -3405,10 +3406,10 @@ class TabularPredictor:
                         infer_limit_batch_size=infer_limit_batch_size, num_trails=hyper_conf['num_trials'],
                         )
             elif hyper_conf['searcher'] == 'TPE':
-                # TODO: add leaderboard as arg
                 cascade_config = hpo_multi_params_TPE(self, cascade_model_seq, hpo_reward_func,
                         infer_limit_batch_size=infer_limit_batch_size,
                         num_trails=hyper_conf['num_trials'], warmup_cascade_thresholds=warmup_cascade_thresholds,
+                        verbose=False,
                         )
             else:
                 raise ValueError(f'not support searcher={hyper_conf["searcher"]}')

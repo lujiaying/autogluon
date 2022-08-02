@@ -7,7 +7,6 @@ import operator
 import itertools
 from dataclasses import dataclass, asdict
 
-import tqdm
 import pandas as pd
 import numpy as np
 from scipy.special import expit
@@ -625,7 +624,7 @@ def hpo_multi_params_random_search(predictor, cascade_model_seq: List[str],
             search_space.append(points)   # leads to (cascade_len-1, num_trails)
         search_space = np.stack(search_space, axis=1)   # (num_trails, cascade_len-1)
     print('[hpo_multi_params_random_search] Start produce val_metrics, and val_time over search space')
-    for thresholds in tqdm.tqdm(search_space):
+    for thresholds in search_space:
         metric_value, infer_time = get_cascade_metric_and_time_by_threshold(val_data, thresholds,
                 cascade_model_seq, model_pred_proba_dict, model_pred_time_marginal_dict, predictor)
         cas_conf = CascadeConfig(model=tuple(cascade_model_seq), thresholds=tuple(thresholds),

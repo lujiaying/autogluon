@@ -14,14 +14,16 @@ import datetime
 
 import pandas as pd
 import openml
+import tqdm
 from autogluon.tabular import TabularPredictor
 from autogluon.tabular import __version__ as ag_version
 import autogluon.core.metrics as metrics
 from autogluon.core.utils.infer_utils import get_model_true_infer_speed_per_row_batch
-import tqdm
+from autogluon.tabular.predictor.cascade_do_no_harm import INFER_UTIL_N_REPEATS, F2SP_Preset, GreedyP_Preset, CascadeConfig
+from autogluon.tabular.predictor.cascade_do_no_harm import get_all_predecessor_model_names
 
-from .do_no_harm import fit_cascade, do_infer_with_cascade_conf, get_all_predecessor_model_names
-from .do_no_harm import INFER_UTIL_N_REPEATS, F2SP_Preset, GreedyP_Preset, CascadeConfig
+#from .do_no_harm import fit_cascade, do_infer_with_cascade_conf, get_all_predecessor_model_names
+#from .do_no_harm import INFER_UTIL_N_REPEATS, F2SP_Preset, GreedyP_Preset, CascadeConfig
 
 @dataclass(frozen=True)
 class ResultRow:
