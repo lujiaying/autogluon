@@ -3376,6 +3376,9 @@ class TabularPredictor:
                 print(f'\t\tFeature Preprocessing requires {round(preprocess_1_time/infer_limit*100, 2)}% '
                       f'of the overall inference constraint ({infer_limit}s)\n'
                       f'\t\t{infer_limit_new}s inference time budget remaining for models...')
+                if infer_limit_new <= 0:
+                    result[hyper_name] = None
+                    continue
                 # upper bound is defined for specific infer_limit_batch_size
                 time_val_ubound = infer_limit_new * val_data[0].shape[0]
                 hpo_reward_func = AGCasAccuracy(eval_metric, time_val_ubound)
