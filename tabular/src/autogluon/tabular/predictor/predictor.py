@@ -3271,7 +3271,9 @@ class TabularPredictor:
     # =======
     # Start Cascade Related Scripts
     def fit_cascade(self, infer_limit: float = None, infer_limit_batch_size: int = None, 
-                    hyperparameter_cascade: Union[str, dict] = 'F2S+') -> Dict[str, CascadeConfig]:
+                    hyperparameter_cascade: Union[str, dict] = 'F2S+',
+                    max_memory: float=0.5,
+                    ) -> Dict[str, CascadeConfig]:
         """
         infer_limit: float, default = None
         The inference time limit in seconds per row to achieve. This is not gurantee because.
@@ -3333,7 +3335,7 @@ class TabularPredictor:
             infer_limit_batch_size = 10000  # use default
         
         clean_partial_weighted_ensembles(self)
-        persisted_models = self.persist_models('all')
+        self.persist_models('all', max_memory=max_memory)
         # get *genuine* speed
         print('Original leaderboard w/o speed calibration using infer_limit_batch_size:')
         leaderboard = self.leaderboard()
