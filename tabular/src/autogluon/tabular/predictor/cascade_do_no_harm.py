@@ -242,7 +242,7 @@ class AGCasAccuracy(AbstractCasHpoFunc):
     name: str = HPOScoreFunc.ACCURACY.name
 
     def __init__(self, metric_name: str, infer_time_ubound: float):
-        assert metric_name in ['roc_auc', 'acc', 'accuracy']
+        assert metric_name in ['roc_auc', 'acc', 'accuracy', 'log_loss', 'nll']
         self.metric_name = metric_name
         self.infer_time_ubound = infer_time_ubound   # the overall val time upper bound
         # the penalty: $f(t) = \alpha * (1 + e^{-(t - \mu) / \beta}) ^ {-1}$
@@ -257,7 +257,6 @@ class AGCasAccuracy(AbstractCasHpoFunc):
 
     def call(self, model_perf_inftime_df: pd.DataFrame) -> pd.DataFrame:
         model_perf_inftime_df = model_perf_inftime_df.copy()
-        # TODO: may use a smooth version of penalty function
         # inftime_penalty = np.where(model_perf_inftime_df[PRED_TIME] <= self.infer_time_ubound, 0.0, self.const_penlaty)
         inftime_penalty = np.where(model_perf_inftime_df[PRED_TIME] <= self.infer_time_ubound, 0.0, self.cal_penalty(model_perf_inftime_df[PRED_TIME]))
         model_perf_inftime_df[SCORE] = model_perf_inftime_df[PERFORMANCE] + inftime_penalty
@@ -376,7 +375,10 @@ def ensure_contain_weighted_ensemble(predictor):
         name_suffix = PWE_suffix
         full_to_ori_dict = predictor.get_model_full_dict(inverse=True)
         refit_full = True if len(full_to_ori_dict) > 0 else False
-        predictor.fit_weighted_ensemble(name_suffix=name_suffix, refit_full=refit_full)
+        if refit_full:
+            predictor.fit_weighted_ensemble(models=list(full_to_ori_dict.values()), name_suffix=name_suffix, refit_full=refit_full)
+        else:
+            predictor.fit_weighted_ensemble(name_suffix=name_suffix)
 
 
 def get_cascade_model_sequence_by_val_marginal_time(predictor,
