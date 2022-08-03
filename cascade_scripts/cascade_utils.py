@@ -501,7 +501,52 @@ def load_dataset(dataset_name: str) -> tuple:
         label = 'label'
         image_col = 'image_id'
         path_train = path_prefix + 'train/part-00001-31cb8e7f-4de7-4c5a-8068-d734df5cc6c7.c000.snappy.parquet'
+        # 512
         path_test = path_prefix + 'test/part-00001-31cb8e7f-4de7-4c5a-8068-d734df5cc6c7.c000.snappy.parquet'
+        eval_metric = 'roc_auc'
+        model_hyperparameters = 'default'
+        n_folds = 1
+        n_repeats = 1
+    elif dataset_name == 'CPP-0e097514':
+        path_prefix = 'datasets/cpp_research_corpora/2021_60datasets/0e097514-a7fa-45cc-b106-7b91fdca3c70/'
+        label = 'label'
+        image_col = 'image_id'
+        path_train = path_prefix + 'train/part-00001-9fc2eb42-a4eb-4ad2-a91f-ac8451d4a7e4.c000.snappy.parquet'
+        # 376
+        path_test = path_prefix + 'test/part-00001-9fc2eb42-a4eb-4ad2-a91f-ac8451d4a7e4.c000.snappy.parquet'
+        eval_metric = 'roc_auc'
+        model_hyperparameters = 'default'
+        n_folds = 1
+        n_repeats = 1
+    elif dataset_name == 'CPP-2d91e357':
+        path_prefix = 'datasets/cpp_research_corpora/2021_60datasets/2d91e357-7318-41a3-a738-f3dde231268d/'
+        label = 'label'
+        image_col = 'image_id'
+        path_train = path_prefix + 'train/part-00001-96c15d4a-e29f-4729-b197-870e7b81e35c.c000.snappy.parquet'
+        # 444
+        path_test = path_prefix + 'test/part-00001-96c15d4a-e29f-4729-b197-870e7b81e35c.c000.snappy.parquet'
+        eval_metric = 'roc_auc'
+        model_hyperparameters = 'default'
+        n_folds = 1
+        n_repeats = 1
+    elif dataset_name == 'CPP-e4367988':
+        path_prefix = 'datasets/cpp_research_corpora/2021_60datasets/e4367988-17e8-4727-ac84-58603b9931e4/'
+        label = 'label'
+        image_col = 'image_id'
+        path_train = path_prefix + 'train/part-00001-6915e570-e538-4177-a5f1-b17641151798.c000.snappy.parquet'
+        # 395
+        path_test = path_prefix + 'test/part-00001-6915e570-e538-4177-a5f1-b17641151798.c000.snappy.parquet'
+        eval_metric = 'roc_auc'
+        model_hyperparameters = 'default'
+        n_folds = 1
+        n_repeats = 1
+    elif dataset_name == 'CPP-a385488d':
+        path_prefix = 'datasets/cpp_research_corpora/2021_60datasets/a385488d-b8a2-471a-b8c5-6bc99947a448/'
+        label = 'label'
+        image_col = 'image_id'
+        path_train = path_prefix + 'train/part-00001-4c9128e6-b167-49ba-a877-42799b40e606.c000.snappy.parquet'
+        # 395
+        path_test = path_prefix + 'test/part-00001-4c9128e6-b167-49ba-a877-42799b40e606.c000.snappy.parquet'
         eval_metric = 'roc_auc'
         model_hyperparameters = 'default'
         n_folds = 1
@@ -512,6 +557,7 @@ def load_dataset(dataset_name: str) -> tuple:
         label = 'label'
         image_col = 'image_id'
         path_train = path_prefix + 'train/part-00001-9c4bc314-0803-4d61-a7c2-6f74f9c9ccfd.c000.snappy.parquet'
+        # 11887
         path_test = path_prefix + 'test/part-00001-9c4bc314-0803-4d61-a7c2-6f74f9c9ccfd.c000.snappy.parquet'
         eval_metric = 'roc_auc'
         model_hyperparameters = 'default'
@@ -523,6 +569,7 @@ def load_dataset(dataset_name: str) -> tuple:
         label = 'label'
         image_col = 'image_id'
         path_train = path_prefix + 'train/part-00001-f911a96a-ace6-42cb-a28b-7ed785b7e2d3.c000.snappy.parquet'
+        # 2947
         path_test = path_prefix + 'test/part-00001-f911a96a-ace6-42cb-a28b-7ed785b7e2d3.c000.snappy.parquet'
         eval_metric = 'roc_auc'
         model_hyperparameters = 'default'

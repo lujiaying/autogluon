@@ -1065,7 +1065,7 @@ def hpo_post_process(predictor, chosen_cascd_config: CascadeConfig,
     Here we still only access to validation data set
     """
     global COLS_REPrt, CASCADE_MNAME
-    model_perf_inftime_df = leaderboard[COLS_REPrt].copy().set_index(MODEL)
+    model_perf_inftime_df = leaderboard[leaderboard['can_infer']][COLS_REPrt].copy().set_index(MODEL)
     model_perf_inftime_df.loc[CASCADE_MNAME] = [chosen_cascd_config.score_val, chosen_cascd_config.pred_time_val]
     model_perf_inftime_df = hpo_reward_func(model_perf_inftime_df).sort_values(by=SCORE, ascending=False)
     best_row = model_perf_inftime_df.iloc[0]

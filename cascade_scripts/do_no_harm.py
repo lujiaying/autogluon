@@ -25,6 +25,7 @@ from autogluon.core.data.label_cleaner import LabelCleanerMulticlassToBinary
 from autogluon.core.utils.time import sample_df_for_time_func, time_func
 from autogluon.tabular.configs.hyperparameter_configs import get_hyperparameter_config
 from autogluon.core.utils.infer_utils import get_model_true_infer_speed_per_row_batch
+from sklearn.metrics import pairwise_distances_argmin
 import tqdm
 
 from .cascade_utils import load_dataset, helper_get_val_data, paretoset
@@ -1080,6 +1081,8 @@ def main(args: argparse.Namespace):
             infer_limit_batch_size=infer_limit_batch_size,
         )
         if do_multimodal:
+            infer_limit_batch_size = 1000
+            print(f'do_multimodal, so infer_limit_batch_size = {infer_limit_batch_size}')
             # currently support PetFinder or CPP
             # update several fit kwargs
             hyperparameters = get_hyperparameter_config('multimodal')
@@ -1110,8 +1113,69 @@ def main(args: argparse.Namespace):
             predictor.fit(**fit_kwargs)
         else:
             predictor = TabularPredictor.load(model_save_path, require_version_match=False)
-        clean_partial_weighted_ensembles(predictor)
+        
+        test_data_sampled = sample_df_for_time_func(df=test_data, sample_size=infer_limit_batch_size, 
+                                            max_sample_size=infer_limit_batch_size)
 
+        result_df = []
+        # use predictor.fit_cascade()
+        for infer_limit in [None, 0.1, 0.05, 0.01, 0.001]:
+            for cascade_algo_name in ['F2S+']:
+                preset = F2SP_Preset() if cascade_algo_name == 'F2S+' else GreedyP_Preset()
+                fit_cascade_params = {
+                    'infer_limit': infer_limit,
+                    'infer_limit_batch_size': infer_limit_batch_size,
+                    'hyperparameter_cascade': {f'{cascade_algo_name}_{infer_limit}': asdict(preset)},
+                    'max_memory': 0.75,
+                }
+                cascade_configs_dict = predictor.fit_cascade(**fit_cascade_params)
+                for cascd_hyper_name, cascade_config in cascade_configs_dict.items():
+                    infer_time, pred_probas = predictor.do_infer_with_cascade_conf(cascade_config, test_data)
+                    test_metrics = predictor.evaluate_predictions(test_data[label], pred_probas, silent=True)
+                    genuine_infer_time, _ = predictor.do_infer_with_cascade_conf(cascade_config, test_data_sampled)
+                    print(f'{cascd_hyper_name}, {cascade_config}, {infer_time}, {test_metrics}, {genuine_infer_time}')
+                    result_df.append(
+                        {
+                            'model': cascd_hyper_name,
+                            'info': asdict(cascade_config),
+                            'infer_time': infer_time,
+                            'genuine_infer_time': genuine_infer_time,
+                            'sec_per_row': infer_time / len(test_data),
+                            'genuine_sec_per_row': genuine_infer_time / infer_limit_batch_size,
+                            **test_metrics,
+                        }
+                    )
+        # get member model genuine_infer_time
+        clean_partial_weighted_ensembles(predictor)
+        genuine_time_per_row_df, genuine_time_per_row_transform = get_model_true_infer_speed_per_row_batch(
+            data=test_data, predictor=predictor, batch_size=infer_limit_batch_size, repeats=2, silent=True)
+        time_per_row_df, time_per_row_transform = get_model_true_infer_speed_per_row_batch(
+            data=test_data, predictor=predictor, batch_size=len(test_data), repeats=2, silent=True)
+        for index, row in genuine_time_per_row_df.iterrows():
+            model = index
+            sec_per_row = time_per_row_df.loc[model]['pred_time_test_with_transform']
+            genuine_sec_per_row = genuine_time_per_row_df.loc[model]['pred_time_test_with_transform']
+            test_metrics = predictor.evaluate(test_data, model=model)
+            result_df.append(
+                {
+                    'model': model,
+                    'infer_time': sec_per_row * len(test_data),
+                    'genuine_infer_time': genuine_sec_per_row * infer_limit_batch_size,
+                    'sec_per_row': sec_per_row,
+                    'genuine_sec_per_row': genuine_sec_per_row,
+                    **test_metrics,
+                }
+            )
+        print(result_df)
+        result_df = pd.DataFrame.from_records(result_df)
+        dirname = os.path.dirname(exp_result_save_path)
+        if not os.path.exists(dirname):
+            os.makedirs(dirname)
+        result_df.to_csv(exp_result_save_path)
+
+
+        """
+        clean_partial_weighted_ensembles(predictor)
         persisted_models = predictor.persist_models('all')
         print(f'persisted_models={persisted_models}')
         print('Original leaderboard w/o speed calibration using infer_limit_batch_size:')
@@ -1186,7 +1250,8 @@ def main(args: argparse.Namespace):
         # model_names = ['F2S/RAND', 'F2SP/RAND', 'F2S++/RAND', 'F2SP++/RAND', 'F2S/TPE', 'F2SP/TPE', 'F2S++/TPE', 'F2SP++/TPE', ]   
         # model_names = ['F2SP++/RAND', 'F2SP++/TPE', 'Greedy/TPE', 'Greedy++/TPE']
         # model_names = ['F2SP++/TPE', 'Greedy++/TPE']
-        model_names = ['F2SP++/TPE', 'Greedy++/TPE']
+        # model_names = ['F2SP++/TPE', 'Greedy++/TPE']
+        model_names = []
         for model_name in model_names:
             print('--------')
             # Set up configs
@@ -1260,6 +1325,7 @@ def main(args: argparse.Namespace):
         if not os.path.exists(exp_result_save_dir):
             os.makedirs(exp_result_save_dir)
         exp_result_df.to_csv(exp_result_save_path)
+        """
 
 
 if __name__ == '__main__':
