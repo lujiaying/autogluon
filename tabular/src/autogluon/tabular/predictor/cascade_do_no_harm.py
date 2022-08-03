@@ -366,21 +366,6 @@ def translate_cascade_sequence_to_WE_version(model_sequence: List[str], predicto
     return ret_model_sequence
 
 
-def ensure_contain_weighted_ensemble(predictor):
-    leaderboard = predictor.leaderboard(silent=True)
-    model_last = get_model_last(leaderboard)
-    if not model_last.startswith('WeightedEnsemble'):
-        # manually train a new one
-        global PWE_suffix
-        name_suffix = PWE_suffix
-        full_to_ori_dict = predictor.get_model_full_dict(inverse=True)
-        refit_full = True if len(full_to_ori_dict) > 0 else False
-        if refit_full:
-            predictor.fit_weighted_ensemble(models=list(full_to_ori_dict.values()), name_suffix=name_suffix, refit_full=refit_full)
-        else:
-            predictor.fit_weighted_ensemble(name_suffix=name_suffix)
-
-
 def get_cascade_model_sequence_by_val_marginal_time(predictor,
                                                     infer_limit_batch_size: int,
                                                     are_member_of_best: bool = True,
@@ -414,8 +399,7 @@ def get_cascade_model_sequence_by_val_marginal_time(predictor,
     else:
         leaderboard = leaderboard.copy()
     # we have to use last model instead of best model
-    best_model_name = get_model_last(leaderboard)
-    # best_model_name = predictor.get_model_best()
+    best_model_name = predictor.get_model_best()
     if not best_model_name.startswith('WeightedEnsemble_L'):
         # best model NOT contain model member as candidates for cascade sequence
         return [best_model_name]
@@ -619,6 +603,7 @@ def hpo_multi_params_random_search(predictor, cascade_model_seq: List[str],
     Args:
         infer_time_limit: required when hpo_score_func_name=="ACCURACY".
             indicates seconds per row to adhere
+    TODO: test whether works for len=1 cascade_model_seq
     """
     rng = np.random.default_rng(RANDOM_MAGIC_NUM)
     problem_type = predictor._learner.problem_type
@@ -730,6 +715,20 @@ def hpo_multi_params_TPE(predictor, cascade_model_seq: List[str],
                 get_models_pred_proba_on_val(predictor, list(cascade_model_all_predecessors), infer_limit_batch_size)
     if val_data == None:
         val_data, _ = helper_get_val_data(predictor)
+    # no need to proceed to hpo process
+    if len(cascade_model_seq) == 1:
+        thresholds = (ts_min)
+        metric_value, infer_time = get_cascade_metric_and_time_by_threshold(val_data, thresholds,
+                cascade_model_seq, model_pred_proba_dict, model_pred_time_marginal_dict, predictor)
+        cascade_config = CascadeConfig(
+            model=tuple(cascade_model_seq),
+            thresholds=(ts_min),
+            score_val=metric_value,
+            pred_time_val=infer_time,
+            hpo_score=None,
+            hpo_func_name=None,
+        )
+        return cascade_config
     # start hpo process
     model_threshold_cands_dict = build_threshold_cands_dynamic(model_pred_proba_dict, problem_type)
     # warmup points define the actual warmup trials

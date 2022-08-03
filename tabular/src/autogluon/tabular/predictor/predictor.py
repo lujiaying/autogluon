@@ -3336,7 +3336,6 @@ class TabularPredictor:
         
         clean_partial_weighted_ensembles(self)
         self.persist_models('all', max_memory=max_memory)
-        ensure_contain_weighted_ensemble(self)
         # get *genuine* speed
         print('Original leaderboard w/o speed calibration using infer_limit_batch_size:')
         leaderboard = self.leaderboard()
@@ -3408,6 +3407,7 @@ class TabularPredictor:
                 warmup_cascade_thresholds = [list(cascade_config_by_greedy.thresholds)]
             else:
                 raise ValueError(f'Not support cascade_algo={hyper_conf["cascade_algo"]}')
+            assert len(cascade_model_seq) > 0
             # Step2: hpo for best cascade short-circuit thresholds
             if hyper_conf['searcher'] == 'Random':
                 cascade_config = hpo_multi_params_random_search(self, cascade_model_seq, hpo_reward_func,
