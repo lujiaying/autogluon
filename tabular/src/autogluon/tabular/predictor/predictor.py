@@ -3278,49 +3278,52 @@ class TabularPredictor:
         infer_limit: float, default = None
         The inference time limit in seconds per row to achieve. This is not gurantee because.
 
-    infer_limit_batch_size: int, default = None
-        The batch size to use when predicting in bulk to estimate per-row inference time. Must be an integer greater than 0. If None and infer_limit is specified, will default to 10000.
+        infer_limit_batch_size: int, default = None
+            The batch size to use when predicting in bulk to estimate per-row inference time. Must be an integer greater than 0. If None and infer_limit is specified, will default to 10000.
 
-    hyperparameter_cascade: str or dict, default = 'F2S+'
-        Specifies which cascade algorithms to use and what hyperparameter-values to use for them.
-        Valid str options: ['F2S+', 'Greedy+']. 
-            'F2S+' denotes Fast-to-Slow Plus algorithm, where model in cascade is ordered by *pred_time_val_marginal*. 
-            'Greedy+' denotes Greedy Search algorithm, where the cascade model sequence is determined by a greedy search process.
-            It is worth noting that '+' denotes that each model member is replaced by a newly fitted weighted_ensemble model of the trained model and its precedents, e.g. ['KNN', 'Cat', 'RF', 'NN', 'WE_L2'] -> ['KNN', 'WE_L2-KNN_Cat', 'WE_L2-KNN_Cat_RF', 'WE_L2-KNN_Cat_RF_NN', 'WE_L2']. 
+        hyperparameter_cascade: str or dict, default = 'F2S+'
+            Specifies which cascade algorithms to use and what hyperparameter-values to use for them.
+            Valid str options: ['F2S+', 'Greedy+']. 
+                'F2S+' denotes Fast-to-Slow Plus algorithm, where model in cascade is ordered by *pred_time_val_marginal*. 
+                'Greedy+' denotes Greedy Search algorithm, where the cascade model sequence is determined by a greedy search process.
+                It is worth noting that '+' denotes that each model member is replaced by a newly fitted weighted_ensemble model of the trained model and its precedents, e.g. ['KNN', 'Cat', 'RF', 'NN', 'WE_L2'] -> ['KNN', 'WE_L2-KNN_Cat', 'WE_L2-KNN_Cat_RF', 'WE_L2-KNN_Cat_RF_NN', 'WE_L2']. 
 
-        If set to 'F2S+', will use: 
-        {
-            'F2S+_default': {'num_trials': 1000, 'searcher': 'TPE', 'hpo_score_func': 'ag_goodness'}
-        }
-        If set to 'Greedy+', will use:
-        {
-            'Greedy+_default': {'num_trials': 1000, 'searcher': 'TPE', 'hpo_score_func': 'ag_goodness', 'each_config_num_trials': 50}
-        }
-        Details regarding the hyperparameters you can specify for each cascade algorithm:
-            num_trials: int, default=1000
-                HPO maximum trials to find optimal cascade short-circuit thresholds.
+            If set to 'F2S+', will use: 
+            {
+                'F2S+_default': {'num_trials': 1000, 'searcher': 'TPE', 'hpo_score_func': 'ag_goodness'}
+            }
+            If set to 'Greedy+', will use:
+            {
+                'Greedy+_default': {'num_trials': 1000, 'searcher': 'TPE', 'hpo_score_func': 'ag_goodness', 'each_config_num_trials': 50}
+            }
+            Details regarding the hyperparameters you can specify for each cascade algorithm:
+                num_trials: int, default=1000
+                    HPO maximum trials to find optimal cascade short-circuit thresholds.
 
-            searcher: str, default='TPE'
-                Valid values are: ['TPE', 'Random'].
+                searcher: str, default='TPE'
+                    Valid values are: ['TPE', 'Random'].
 
-            hpo_score_func: str, default='ag_goodness'
-                Valid values are: ['ag_goodness', 'eval_metric'].
-                'ag_goodness' is a AutoGluon pre-defined weighted sum score of eval_metric and inference throughput, with practise-based penalty that pushes the built cascade model to achieve strong (penalize severaly when eval_metric is close to random guess) and fast (penalize if cascade is too fast to focus more on eval_metric) performance for real-life application. 
-                'eval_metric' is a score function that maxmize eval_metric within specified `infer_limit`.
-                !! hpo_score_func will be overwritten into 'eval_metric' when `infer_limit` is specified.
+                hpo_score_func: str, default='ag_goodness'
+                    Valid values are: ['ag_goodness', 'eval_metric'].
+                    'ag_goodness' is a AutoGluon pre-defined weighted sum score of eval_metric and inference throughput, with practise-based penalty that pushes the built cascade model to achieve strong (penalize severaly when eval_metric is close to random guess) and fast (penalize if cascade is too fast to focus more on eval_metric) performance for real-life application. 
+                    'eval_metric' is a score function that maxmize eval_metric within specified `infer_limit`.
+                    !! hpo_score_func will be overwritten into 'eval_metric' when `infer_limit` is specified.
 
-            each_config_num_trials: int, default=50
-                Currently only supported in 'Greedy+'. Greedy search cascade build algorithm involves a series of hpo trials for each configure during search process. This argument determine the number of trails to run for each configure. Recommed set a number less than 80 for reasonble duration.
+                hpo_score_func_kwargs: dict, default='None'
+                    Can be {'weights': (-1.0, 0.01), ...}, to specify kwargs of ag_goodness.
 
-        Users can specify these hyperparameters to satisfy their own constraints. e.g.:
-        {
-            'F2S+': {'num_trials': 300},
-            'Greedy+': {'hpo_score_func': 'eval_metric'},
-        }
-        The above input hyperparamters would execute both 'F2S+' and 'Greedy+' cascade algorithms. Unspecified arguments would be set to default values.
+                each_config_num_trials: int, default=50
+                    Currently only supported in 'Greedy+'. Greedy search cascade build algorithm involves a series of hpo trials for each configure during search process. This argument determine the number of trails to run for each configure. Recommed set a number less than 80 for reasonble duration.
 
-    Returns: CascadeConfig
-        A custom class that carries all necessary information of a built cascade.
+            Users can specify these hyperparameters to satisfy their own constraints. e.g.:
+            {
+                'F2S+': {'num_trials': 300},
+                'Greedy+': {'hpo_score_func': 'eval_metric'},
+            }
+            The above input hyperparamters would execute both 'F2S+' and 'Greedy+' cascade algorithms. Unspecified arguments would be set to default values.
+
+        Returns: CascadeConfig
+            A custom class that carries all necessary information of a built cascade.
         """
         from dataclasses import asdict
         from .cascade_do_no_harm import INFER_UTIL_N_REPEATS, MODEL, COLS_REPrt
@@ -3354,7 +3357,6 @@ class TabularPredictor:
             print(leaderboard)
         # prepare hpo score functions for later usage
         eval_metric = self.eval_metric.name
-        goodness_func = AGCasGoodness(eval_metric, leaderboard[COLS_REPrt].set_index(MODEL), val_data)
 
         if hyperparameter_cascade == 'F2S+':
             _hyperparameter_cascade = {'F2S+_default': asdict(F2SP_Preset())}
@@ -3386,7 +3388,8 @@ class TabularPredictor:
                 hpo_reward_func = AGCasAccuracy(eval_metric, time_val_ubound)
                 print(f'Try to maxamize performance given time_val_ubound={time_val_ubound}, when infer_time_limit={infer_limit} ({infer_limit_new}), val_data shape={val_data[0].shape[0]}')
             elif hyper_conf['hpo_score_func'] == 'ag_goodness':
-                hpo_reward_func = goodness_func
+                hpo_reward_func = AGCasGoodness(eval_metric, leaderboard[COLS_REPrt].set_index(MODEL), val_data,
+                                                **hyper_conf['hpo_score_func_kwargs'])
             else:
                 raise ValueError(f'Not support hpo_score_func={hyper_conf["hpo_score_func"]}')
             # Step1: construct cascade model sequence
@@ -3426,6 +3429,7 @@ class TabularPredictor:
             cascade_config = hpo_post_process(self, cascade_config, hpo_reward_func, leaderboard)
             print(f'after post_process, cascade_config={cascade_config}')
             result[hyper_name] = cascade_config
+            print(hpo_reward_func(leaderboard[COLS_REPrt].set_index(MODEL)))    # TODO: debug
         #clean_partial_weighted_ensembles(predictor)
         return result
 

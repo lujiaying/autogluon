@@ -19,6 +19,7 @@ import numpy as np
 from scipy.stats import norm
 from scipy.special import softmax
 from autogluon.tabular import TabularPredictor, FeatureMetadata
+from autogluon.tabular.predictor.cascade_do_no_harm import F2SP_Preset, GreedyP_Preset
 from autogluon.core.constants import BINARY, MULTICLASS
 from autogluon.core.metrics import accuracy, roc_auc
 from autogluon.core.data.label_cleaner import LabelCleanerMulticlassToBinary
@@ -925,21 +926,6 @@ def do_infer_with_cascade_conf(
     return te-ts, pred_proba
 
 
-@dataclass(frozen=True)
-class F2SP_Preset:
-    cascade_algo: str = 'F2S+'
-    num_trials: int = 1000
-    searcher: str = 'TPE'
-    hpo_score_func: str = 'ag_goodness'
-
-
-@dataclass(frozen=True)
-class GreedyP_Preset:
-    cascade_algo: str = 'Greedy+'
-    num_trials: int = 1000
-    searcher: str = 'TPE'
-    hpo_score_func: str = 'ag_goodness'
-    each_config_num_trials: int = 50
 
 
 def fit_cascade(
@@ -1078,6 +1064,7 @@ def main(args: argparse.Namespace):
             hyperparameters=model_hyperparameters,
             presets=presets,
             time_limit=time_limit,
+            infer_limit=args.ag_fit_infer_limit,
             infer_limit_batch_size=infer_limit_batch_size,
         )
         if do_multimodal:
@@ -1119,13 +1106,19 @@ def main(args: argparse.Namespace):
 
         result_df = []
         # use predictor.fit_cascade()
-        for infer_limit in [None, 0.1, 0.05, 0.01, 0.001]:
+        infer_limit = None
+        #for infer_limit in [None, 0.1, 0.05, 0.01, 0.001]:
+        for goodness_weights in [(-1.0, 1e-4), (-1.0, 1e-5)]:
             for cascade_algo_name in ['F2S+']:
-                preset = F2SP_Preset() if cascade_algo_name == 'F2S+' else GreedyP_Preset()
+                hpo_score_func_kwargs = {'weights': goodness_weights}
+                if cascade_algo_name == 'F2S+':
+                    hyperp_cascd = F2SP_Preset(hpo_score_func_kwargs=hpo_score_func_kwargs)
+                else:
+                    hyperp_cascd = GreedyP_Preset(hpo_score_func_kwargs=hpo_score_func_kwargs)
                 fit_cascade_params = {
                     'infer_limit': infer_limit,
                     'infer_limit_batch_size': infer_limit_batch_size,
-                    'hyperparameter_cascade': {f'{cascade_algo_name}_{infer_limit}': asdict(preset)},
+                    'hyperparameter_cascade': {f'{cascade_algo_name}_{infer_limit}_goodness_w{goodness_weights}': asdict(hyperp_cascd)},
                     'max_memory': 0.75,
                 }
                 cascade_configs_dict = predictor.fit_cascade(**fit_cascade_params)
@@ -1145,14 +1138,18 @@ def main(args: argparse.Namespace):
                             **test_metrics,
                         }
                     )
+        """
         # get member model genuine_infer_time
         clean_partial_weighted_ensembles(predictor)
+        model_best = predictor.get_model_best()
         genuine_time_per_row_df, genuine_time_per_row_transform = get_model_true_infer_speed_per_row_batch(
             data=test_data, predictor=predictor, batch_size=infer_limit_batch_size, repeats=2, silent=True)
         time_per_row_df, time_per_row_transform = get_model_true_infer_speed_per_row_batch(
             data=test_data, predictor=predictor, batch_size=len(test_data), repeats=2, silent=True)
         for index, row in genuine_time_per_row_df.iterrows():
             model = index
+            if model != model_best:
+                continue
             sec_per_row = time_per_row_df.loc[model]['pred_time_test_with_transform']
             genuine_sec_per_row = genuine_time_per_row_df.loc[model]['pred_time_test_with_transform']
             test_metrics = predictor.evaluate(test_data, model=model)
@@ -1160,12 +1157,13 @@ def main(args: argparse.Namespace):
                 {
                     'model': model,
                     'infer_time': sec_per_row * len(test_data),
-                    'genuine_infer_time': genuine_sec_per_row * infer_limit_batch_size,
+                    'genuine_infer_time': genuine_sec_per_row * len(test_data),
                     'sec_per_row': sec_per_row,
                     'genuine_sec_per_row': genuine_sec_per_row,
                     **test_metrics,
                 }
             )
+        """
         print(result_df)
         result_df = pd.DataFrame.from_records(result_df)
         dirname = os.path.dirname(exp_result_save_path)
@@ -1343,6 +1341,8 @@ if __name__ == '__main__':
         default=HPOScoreFunc.GOODNESS)
     parser.add_argument('--infer_time_limit', type=float, default=None,
             help='infer time limit in seconds per row.')
+    parser.add_argument('--ag_fit_infer_limit', type=float, default=None,
+            help='infer time limit in seconds per row for AG itself!! Not cascade.')
     parser.add_argument('--infer_limit_batch_size', type=float, default=DEFAULT_INFER_BATCH_SIZE,
             help='batch size to use when predicting in bulk.')
     parser.add_argument('--exec_single_model', action='store_true')

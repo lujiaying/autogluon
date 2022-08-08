@@ -53,6 +53,7 @@ class F2SP_Preset:
     num_trials: int = 800
     searcher: str = 'TPE'
     hpo_score_func: str = 'ag_goodness'
+    hpo_score_func_kwargs: dict = None
 
 
 @dataclass(frozen=True)
@@ -61,6 +62,7 @@ class GreedyP_Preset:
     num_trials: int = 500
     searcher: str = 'TPE'
     hpo_score_func: str = 'ag_goodness'
+    hpo_score_func_kwargs: dict = None
     each_config_num_trials: int = 50
 
 
@@ -194,6 +196,7 @@ class AGCasGoodness(AbstractCasHpoFunc):
         else:
             speeds = model_perf_inftime_df[SPEED]
         self.speed_min = adjust_speed(speeds.min(), speed_soft_cap)
+        print(f'Initialized Goodness Func with speed_soft_cap={speed_soft_cap}, weights={weights}, random_guess_error={self.random_guess_error}')
 
     def validate_input_df(self, df: pd.DataFrame):
         # overwrite AbstractCasHpoFunc.validate_input_df()

@@ -32,18 +32,32 @@ date="20220802"
 presets="high_quality"
 exp_name="ag-${date}_${dataset_name}_${presets}_1h_MM"
 #dataset_name="CPP-6aa99d1a"
-#for dataset_name in "CPP-6aa99d1a" "CPP-0e097514" "CPP-2d91e357"; do
-#for dataset_name in "CPP-e4367988" "CPP-a385488d"; do
-for dataset_name in "CPP-e4367988"; do
+#for dataset_name in "CPP-6aa99d1a" "CPP-0e097514" "CPP-2d91e357" "CPP-e4367988" "CPP-a385488d"; do
+for dataset_name in "CPP-a385488d"; do
     python -m cascade_scripts.do_no_harm \
         --do_multimodal \
         --predictor_presets ${presets} \
         --time_limit 3600 \
         --dataset_name ${dataset_name} \
-        --exp_result_save_path ExpResults/${dataset_name}/${exp_name}.csv \
+        --exp_result_save_path ExpResults/${dataset_name}/${exp_name}_goodness_adjust_weights.csv \
         --model_save_path AutogluonModels/${dataset_name}/ag-${date}_${dataset_name}_${presets}_MultiModal
 done
 # --hpo_score_func_name ACCURACY --infer_time_limit 4e-4 \
+
+# date="20220802"
+# presets="high_quality"
+# for infer_limit in 0.005 0.01 0.1; do
+#     for dataset_name in "CPP-6aa99d1a" "CPP-0e097514" "CPP-2d91e357" "CPP-e4367988" "CPP-a385488d"; do
+#         python -m cascade_scripts.do_no_harm \
+#             --do_multimodal \
+#             --predictor_presets ${presets} \
+#             --ag_fit_infer_limit ${infer_limit} \
+#             --time_limit 3600 \
+#             --dataset_name ${dataset_name} \
+#             --exp_result_save_path ExpResults/${dataset_name}/ag-${date}_${dataset_name}_${presets}_agFitInferLimit_${infer_limit}_1h_MM.csv \
+#             --model_save_path AutogluonModels/${dataset_name}/ag-${date}_${dataset_name}_${presets}_agFitInferLimit_${infer_limit}_1h_MM
+#     done
+# done
 
 # python -m cascade_scripts.ag_infer_limit \
 #      --do_multimodal \
