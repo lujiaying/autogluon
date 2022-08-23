@@ -14,6 +14,7 @@ from scipy.stats import norm
 from scipy.special import softmax
 from autogluon.core.constants import BINARY, MULTICLASS
 from autogluon.core.metrics import accuracy, roc_auc, log_loss
+from autogluon.core.utils import get_pred_from_proba
 from autogluon.core.utils.infer_utils import get_model_true_infer_speed_per_row_batch
 
 
@@ -41,8 +42,8 @@ INFER_UTIL_N_REPEATS = 2
 class CascadeConfig:
     model: Tuple[str]         # cascade model sequence. Length=N
     thresholds: Tuple[float]  # regarding short-circuit/early-exit thresholds. Length=N-1
-    pred_time_val: float
-    score_val: float
+    pred_time_val: float      # simulated pred_time_val w/o feature transform time
+    score_val: float          # simulates score_val
     hpo_score: float
     hpo_func_name: Optional[str] = None
 
@@ -414,9 +415,9 @@ def get_cascade_model_sequence_by_val_marginal_time(predictor,
         valid_cascade_models = predictor._trainer.get_minimum_model_set(best_model_name)
         model_sequence = [m for m in model_sequence if m in valid_cascade_models]
     if build_pwe_flag:
-        # print(f'before build_pwe, {model_sequence=}')
+        print(f'Fast-to-slow: before build_pwe, {model_sequence=}')
         model_sequence = translate_cascade_sequence_to_WE_version(model_sequence, predictor)
-        # print(f'after build_pwe, {model_sequence=}')
+        print(f'Fast-to-slow: after build_pwe, {model_sequence=}')
     leaderboard = predictor.leaderboard(silent=True).set_index(MODEL)
     if better_than_prev:
         #print(f'before build pareto-frontier: {model_sequence=}')
@@ -466,6 +467,8 @@ def get_models_pred_proba_on_val(predictor, models: List[str],
     # get genuine infer_time
     val_label_ori = predictor.transform_labels(val_data[1], inverse=True)
     val_data_wlabel = pd.concat([val_data[0], val_label_ori], axis=1)
+    # TODO: need to fix this, because val_data internal NOT get correct feature_transfer time
+    assert leaderboard is not None
     if leaderboard is None:
         global INFER_UTIL_N_REPEATS
         n_repeats = INFER_UTIL_N_REPEATS
@@ -474,9 +477,9 @@ def get_models_pred_proba_on_val(predictor, models: List[str],
         # not including feature transform time
         model_pred_time_marginal_dict = {m: time_per_row_df.loc[m]['pred_time_test_marginal'] * len(val_data_wlabel) for m in models}
     else:
-        # !! assume leaderboard contains genuine infer_time
+        # !! assume leaderboard contains genuine infer_time (already scaled with val data size)
         leaderboard = leaderboard.copy().set_index('model')
-        model_pred_time_marginal_dict = {m: leaderboard.loc[m]['pred_time_val_marginal'] * len(val_data_wlabel) for m in models}
+        model_pred_time_marginal_dict = {m: leaderboard.loc[m]['pred_time_val_marginal'] for m in models}
     return model_pred_proba_dict, model_pred_time_marginal_dict, val_data
 
 
@@ -503,6 +506,7 @@ def get_cascade_metric_and_time_by_threshold(val_data: Tuple[np.ndarray, np.ndar
                                              model_pred_time_dict: Dict[str, float],
                                              predictor,
                                              ) -> Tuple[float, float]:
+    # simulation function
     # mimic logic here: https://github.com/awslabs/autogluon/blob/eb314b1032bc9bc3f611a4d6a0578370c4c89277/core/src/autogluon/core/trainer/abstract_trainer.py#L795
     global METRIC_FUNC_MAP
     metric_name: str = predictor.eval_metric.name
@@ -539,9 +543,9 @@ def get_cascade_metric_and_time_by_threshold(val_data: Tuple[np.ndarray, np.ndar
             ret_pred_proba[unconfident] = pred_proba[unconfident]
             nonexec_marginal_time_table = get_non_excuted_predecessors_marginal_time(predictor, model_name, executed_model_names, model_pred_time_dict)
             ret_infer_time += (unconfident.sum() / num_rows * nonexec_marginal_time_table)
-            # ret_infer_time += (unconfident.sum() / num_rows * model_pred_time_dict[model_name])
             break
         if problem_type == BINARY:
+            assert pred_proba.ndim == 1
             if threshold == 1.0:
                 # TODO: handle non proba case
                 # threshold is for probability, th=1.0 means we never early exit at this model
@@ -568,7 +572,10 @@ def get_cascade_metric_and_time_by_threshold(val_data: Tuple[np.ndarray, np.ndar
             # print(f'{cascade_threshold=}: After {model_name}, we collect all pred. Exit cascade')
             break
     metric_function = METRIC_FUNC_MAP[metric_name]
-    metric_value = metric_function(y_true=Y, y_pred=ret_pred_proba)
+    if problem_type == BINARY and metric_name in ['acc', 'accuracy']:
+        metric_value = metric_function(y_true=Y, y_pred=get_pred_from_proba(ret_pred_proba, problem_type))
+    else:
+        metric_value = metric_function(y_true=Y, y_pred=ret_pred_proba)
     return (metric_value, ret_infer_time)
 
 
@@ -598,6 +605,8 @@ def build_threshold_cands_dynamic(model_pred_proba_dict: Dict[str, np.ndarray],
 
 def hpo_multi_params_random_search(predictor, cascade_model_seq: List[str],
         hpo_reward_func: AbstractCasHpoFunc,
+        model_pred_proba_dict: Dict[str, np.ndarray],
+        model_pred_time_marginal_dict: Dict[str, float],
         infer_limit_batch_size: int,
         num_trails: int = 1000,
         ) -> CascadeConfig:
@@ -612,9 +621,10 @@ def hpo_multi_params_random_search(predictor, cascade_model_seq: List[str],
     problem_type = predictor._learner.problem_type
 
     # Get val pred proba
-    cascade_model_all_predecessors = get_all_predecessor_model_names(predictor, cascade_model_seq, include_self=True)
-    model_pred_proba_dict, model_pred_time_marginal_dict, val_data = \
-            get_models_pred_proba_on_val(predictor, list(cascade_model_all_predecessors), infer_limit_batch_size)
+    # cascade_model_all_predecessors = get_all_predecessor_model_names(predictor, cascade_model_seq, include_self=True)
+    # model_pred_proba_dict, model_pred_time_marginal_dict, val_data = \
+    #         get_models_pred_proba_on_val(predictor, list(cascade_model_all_predecessors), infer_limit_batch_size)
+    val_data, _ = helper_get_val_data(predictor)
     model_threshold_cands_dict = build_threshold_cands_dynamic(model_pred_proba_dict, problem_type)
     thresholds_cands = []   # (cas_len-1, variable_cand_size)
     thresholds_probs = []
@@ -656,9 +666,9 @@ def hpo_multi_params_random_search(predictor, cascade_model_seq: List[str],
 
 def hpo_multi_params_TPE(predictor, cascade_model_seq: List[str],
         hpo_reward_func: AbstractCasHpoFunc,
+        model_pred_proba_dict: Optional[Dict[str, np.ndarray]],
+        model_pred_time_marginal_dict: Optional[Dict[str, float]],
         num_trails: int = 1000, warmup_ntrail_percent = 0.05,
-        model_pred_proba_dict: Optional[Dict[str, np.ndarray]] = None,
-        model_pred_time_marginal_dict: Optional[Dict[str, float]] = None,
         verbose: bool = True, 
         warmup_cascade_thresholds: List[List[float]] = [],
         is_search_space_continuous: bool = True,
@@ -712,10 +722,10 @@ def hpo_multi_params_TPE(predictor, cascade_model_seq: List[str],
 
     # Get val pred proba
     val_data = None
-    if model_pred_proba_dict == None or model_pred_time_marginal_dict == None:
-        cascade_model_all_predecessors = get_all_predecessor_model_names(predictor, cascade_model_seq, include_self=True)
-        model_pred_proba_dict, model_pred_time_marginal_dict, val_data = \
-                get_models_pred_proba_on_val(predictor, list(cascade_model_all_predecessors), infer_limit_batch_size)
+    # if model_pred_proba_dict == None or model_pred_time_marginal_dict == None:
+    #     cascade_model_all_predecessors = get_all_predecessor_model_names(predictor, cascade_model_seq, include_self=True)
+    #     model_pred_proba_dict, model_pred_time_marginal_dict, val_data = \
+    #             get_models_pred_proba_on_val(predictor, list(cascade_model_all_predecessors), infer_limit_batch_size)
     if val_data == None:
         val_data, _ = helper_get_val_data(predictor)
     # no need to proceed to hpo process
@@ -1033,6 +1043,7 @@ def get_cascade_model_sequence_by_greedy_search(predictor,
 
 def prune_cascade_config(chosen_cascd_config: CascadeConfig, problem_type: str):
     # TODO: if searched thresholds contains 0.5 or 1.0, we can prune it
+    # Stage 1: definite early exit at certain model
     if problem_type == BINARY:
         min_threshold = 0.5
     elif problem_type == MULTICLASS:
@@ -1044,21 +1055,40 @@ def prune_cascade_config(chosen_cascd_config: CascadeConfig, problem_type: str):
         if threshold == min_threshold:
             # at `idx`, cascade will definitely early exit
             defin_exit_idx = idx
+            break
     if defin_exit_idx is not None:
         if defin_exit_idx == 0:
-           cascd_config = CascadeConfig(model=tuple([chosen_cascd_config.model[0]]), thresholds=tuple([min_threshold]),
+            # length=1 cascade case
+            cascd_config = CascadeConfig(model=tuple([chosen_cascd_config.model[0]]), thresholds=tuple([min_threshold]),
                     pred_time_val=chosen_cascd_config.pred_time_val, score_val=chosen_cascd_config.score_val, 
                     hpo_score=chosen_cascd_config.hpo_score, hpo_func_name=chosen_cascd_config.hpo_func_name
                     ) 
         else:
-           cascd_config = CascadeConfig(model=tuple(chosen_cascd_config.model[:defin_exit_idx+1]), 
+            cascd_config = CascadeConfig(model=tuple(chosen_cascd_config.model[:defin_exit_idx+1]), 
                     thresholds=tuple(chosen_cascd_config.thresholds[:defin_exit_idx]),
                     pred_time_val=chosen_cascd_config.pred_time_val, score_val=chosen_cascd_config.score_val, 
                     hpo_score=chosen_cascd_config.hpo_score, hpo_func_name=chosen_cascd_config.hpo_func_name
                     ) 
-        print(f'before {chosen_cascd_config}, after {cascd_config}')
-        return cascd_config
-    return chosen_cascd_config
+        print(f'before {chosen_cascd_config}, after process definite early exit {cascd_config}')
+    else:
+        cascd_config = chosen_cascd_config
+    # stage 2: remove model with threshold == 1.0 (never exit at this model)
+    mem_idx_kept = []
+    for idx, threshold in enumerate(cascd_config.thresholds):
+        if threshold != 1.0:
+            mem_idx_kept.append(idx)
+    if len(mem_idx_kept) != len(cascd_config.model):
+        model_kept = [m for i, m in enumerate(cascd_config.model) if i in mem_idx_kept]
+        thresholds_kept = tuple([th for i, th in enumerate(cascd_config.thresholds) if i in mem_idx_kept])
+        if len(thresholds_kept) <= 0:
+            # len=1 cascade casse
+            thresholds_kept = tuple([0.0])
+        cascd_config_pruned = CascadeConfig(model=model_kept, thresholds=thresholds_kept,
+                pred_time_val=cascd_config.pred_time_val, score_val=cascd_config.score_val, 
+                hpo_score=cascd_config.hpo_score, hpo_func_name=cascd_config.hpo_func_name
+                ) 
+        cascd_config = cascd_config_pruned
+    return cascd_config
 
 
 def hpo_post_process(predictor, chosen_cascd_config: CascadeConfig,

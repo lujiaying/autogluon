@@ -7,7 +7,7 @@ from typing import List
 
 from autogluon.core.utils import download, unzip
 from autogluon.core.constants import BINARY, MULTICLASS, REGRESSION
-from autogluon.core.data.label_cleaner import LabelCleaner
+from autogluon.core.data.label_cleaner import LabelCleaner, LabelCleanerMulticlassToBinary
 from autogluon.core.utils import infer_problem_type, generate_train_test_split
 from autogluon.features.generators import AutoMLPipelineFeatureGenerator
 from autogluon.tabular import TabularDataset, TabularPredictor
@@ -177,12 +177,90 @@ class FitHelper:
 
         if delete_directory:
             shutil.rmtree(predictor.path, ignore_errors=True)  # Delete AutoGluon output directory to ensure runs' information has been removed.
+        return predictor
 
     @staticmethod
     def fit_dataset(train_data, init_args, fit_args, sample_size=None):
         if sample_size is not None and sample_size < len(train_data):
             train_data = train_data.sample(n=sample_size, random_state=0)
         return TabularPredictor(**init_args).fit(train_data, **fit_args)
+
+    @staticmethod
+    def check_cascade_speed_accuracy_simulation(dataset_name: str, fit_args: dict, cascade: List[str], cascade_thresholds: List[float],
+                                                train_sample_size: int = 1000, infer_limit_batch_size: int = 100000, 
+                                                n_repeats: int = 10, delete_directory: bool = True):
+        import time
+        import numpy as np
+        from autogluon.core.utils.infer_utils import get_model_true_infer_speed_per_row_batch
+        from autogluon.tabular.predictor.cascade_do_no_harm import get_cascade_metric_and_time_by_threshold, get_all_predecessor_model_names
+        directory_prefix = './datasets/'
+        train_data, test_data, dataset_info = DatasetLoaderHelper.load_dataset(name=dataset_name, directory_prefix=directory_prefix)
+        label = dataset_info['label']
+        save_path = os.path.join(directory_prefix, dataset_name, f'AutogluonOutput_{uuid.uuid4()}')
+        init_args = dict(
+            label=label,
+            path=save_path,
+        )
+        predictor = FitHelper.fit_dataset(train_data, init_args, fit_args, sample_size=train_sample_size)
+        predictor.persist_models('all')
+        predictor.leaderboard()
+        cascade_last_model = cascade[-1]
+        print(f'[INFO] constitutent of {cascade_last_model}: {get_all_predecessor_model_names(predictor, cascade_last_model)}')
+        test_data_sampled = test_data.sample(n=infer_limit_batch_size, replace=True, random_state=0)
+        # Get actual end2end infer time and accuracy
+        trainer = predictor._learner.load_trainer()
+        actual_infer_times = []
+        actual_feat_trans_times = []
+        for i in range(n_repeats):
+            ts = time.time()
+            test_data_sampled_X = predictor.transform_features(test_data_sampled)
+            te_transform = time.time()
+            _ = trainer.get_model_pred_proba_dict(
+                test_data_sampled_X, cascade, fit=False,
+                cascade=True, cascade_threshold=cascade_thresholds,
+                )
+            te = time.time()
+            actual_infer_times.append(te - ts)
+            actual_feat_trans_times.append(te_transform - ts)
+        actual_feat_trans_time_prow = np.mean(actual_feat_trans_times) / infer_limit_batch_size
+        actual_infer_time_prow = np.mean(actual_infer_times) / infer_limit_batch_size
+        test_data_X = predictor.transform_features(test_data)
+        test_data_y = predictor.transform_labels(test_data[label])
+        model_pred_proba_dict = trainer.get_model_pred_proba_dict(
+            test_data_X, cascade, fit=False,
+            cascade=True, cascade_threshold=cascade_thresholds,
+            )
+        actual_pred_proba = model_pred_proba_dict[cascade[-1]]
+        if predictor._learner.problem_type == BINARY:
+            actual_pred_proba = LabelCleanerMulticlassToBinary.convert_binary_proba_to_multiclass_proba(actual_pred_proba)
+        #print(f'[DEBUG] {test_data[label]=}; {test_data[label].unique()=}; {actual_pred_proba=} {actual_pred_proba.shape=}')
+        actual_eval_metrics = predictor.evaluate_predictions(y_true=test_data[label], y_pred=actual_pred_proba, silent=True)
+        # Get simulated infer time and accuracy
+        time_per_row_df, time_per_row_transform = get_model_true_infer_speed_per_row_batch(data=test_data_sampled, 
+                                                    predictor=predictor, batch_size=infer_limit_batch_size,
+                                                    repeats=n_repeats)
+        simu_model_pred_proba_dict = {}
+        simu_model_pred_time_dict = {}   # stores marginal time w/o feat trans predcting all test_data
+        for index, row in time_per_row_df.iterrows():
+            simu_model_pred_time_dict[index] = row['pred_time_test_marginal'] * len(test_data)
+            pred_proba = predictor.predict_proba(data=test_data, model=index, as_multiclass=(predictor._learner.problem_type == MULTICLASS))
+            simu_model_pred_proba_dict[index] = pred_proba
+        simu_score, simu_time_no_trans = \
+            get_cascade_metric_and_time_by_threshold((test_data_X, test_data_y), cascade_thresholds, cascade,
+                                                    simu_model_pred_proba_dict, simu_model_pred_time_dict, predictor)
+        simu_time_no_trans_prow = simu_time_no_trans / len(test_data)
+        simu_time_prow = simu_time_no_trans_prow + time_per_row_transform
+        # add assertion
+        print(f'ACTUAL infer sec/row={actual_infer_time_prow}, feat trans sec/row={actual_feat_trans_time_prow}, infer_batch_size={infer_limit_batch_size}')
+        print(f'ACTUAL eval metrics: {actual_eval_metrics}')
+        print(f'SIMULATION infer_time sec/row={simu_time_prow}, feat trans sec/row={time_per_row_transform}, {predictor.eval_metric.name}={simu_score}')
+        func_check_closeness = lambda x, y: abs(x - y) <= 0.25 * max(x, y)
+        assert simu_score == actual_eval_metrics[predictor.eval_metric.name]
+        assert func_check_closeness(time_per_row_transform, actual_feat_trans_time_prow)
+        assert func_check_closeness(simu_time_prow, actual_infer_time_prow)
+        # clean up everything
+        if delete_directory is True:
+            shutil.rmtree(predictor.path, ignore_errors=True)  # Delete AutoGluon output directory to ensure runs' information has been removed.
 
 
 # Helper functions for training models outside of predictors
