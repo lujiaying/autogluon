@@ -3338,35 +3338,28 @@ class TabularPredictor:
         Returns: CascadeConfig
             A custom class that carries all necessary information of a built cascade.
         """
+        ts = time.time()
         from dataclasses import asdict
-        from .cascade_do_no_harm import INFER_UTIL_N_REPEATS, MODEL, COLS_REPrt
+        from .cascade_do_no_harm import MODEL, COLS_REPrt
         from .cascade_do_no_harm import AGCasGoodness, AGCasAccuracy, F2SP_Preset, GreedyP_Preset
         from .cascade_do_no_harm import get_all_predecessor_model_names, get_models_pred_proba_on_val 
         from .cascade_do_no_harm import clean_partial_weighted_ensembles, helper_get_val_data, hpo_post_process
         from .cascade_do_no_harm import get_cascade_model_sequence_by_val_marginal_time, get_cascade_model_sequence_by_greedy_search
-        from .cascade_do_no_harm import hpo_multi_params_random_search, hpo_multi_params_TPE
+        from .cascade_do_no_harm import hpo_multi_params_random_search, hpo_multi_params_TPE, get_genunie_pred_val_time_leaderboard
         from autogluon.core.utils.infer_utils import get_model_true_infer_speed_per_row_batch
         # set up vars
-        n_repeats = INFER_UTIL_N_REPEATS 
         if infer_limit_batch_size is None:
             infer_limit_batch_size = 10000  # use default
         
         clean_partial_weighted_ensembles(self)
         self.persist_models('all', max_memory=max_memory)
-        # get *genuine* speed
-        print('Original leaderboard w/o speed calibration using infer_limit_batch_size:')
-        # TODO: make below lines as a function, about how to get genuine speed
-        leaderboard = self.leaderboard()
         val_data, is_trained_bagging = helper_get_val_data(self)
-        # val_label_ori = self.transform_labels(val_data[1], inverse=True)
-        # val_data_wlabel = pd.concat([val_data[0], val_label_ori], axis=1)
-        time_per_row_df_val, time_per_row_transform_val \
-                = get_model_true_infer_speed_per_row_batch(data=raw_data_for_infer_speed, predictor=self, batch_size=infer_limit_batch_size, 
-                                                           repeats=n_repeats, silent=True)
-        leaderboard = leaderboard.set_index(MODEL)
-        leaderboard.loc[time_per_row_df_val.index, 'pred_time_val'] = time_per_row_df_val['pred_time_test'] * len(val_data)
-        leaderboard.loc[time_per_row_df_val.index, 'pred_time_val_marginal'] = time_per_row_df_val['pred_time_test_marginal'] * len(val_data)
-        leaderboard = leaderboard.reset_index()
+        # get *genuine* speed
+        genuine_ts = time.time()
+        leaderboard, (time_per_row_df_val, time_per_row_transform_val) = get_genunie_pred_val_time_leaderboard(self, 
+                raw_data_for_infer_speed, len(val_data[0]), infer_limit_batch_size)
+        genuine_te = time.time()
+        print(f'[DEBUG] get genuine speed cost {genuine_te-genuine_ts} seconds')
         print('Get genuine speed/val_time per specified infer_limit_batch_size, only for can_infer models')
         with pd.option_context('display.max_rows', None, 'display.max_columns', None, 'display.width', 1000):
             print(leaderboard)
@@ -3423,17 +3416,13 @@ class TabularPredictor:
             raise ValueError(f'Not support cascade_algo={_hyperparameter_cascade["cascade_algo"]}')
         assert len(cascade_model_seq) > 0
         # Step2: hpo for best cascade short-circuit thresholds
-        ## Get model_pred_proba_dict, and pred_time_margianl first
-        ## TODO: this is repeated, at begining of fit_cascade we did it once. Better use a function
-        leaderboard = self.leaderboard(silent=True)
-        time_per_row_df_val, time_per_row_transform_val \
-                = get_model_true_infer_speed_per_row_batch(data=raw_data_for_infer_speed, predictor=self, batch_size=infer_limit_batch_size, 
-                                                           repeats=n_repeats, silent=True)
-        leaderboard = leaderboard.set_index(MODEL)
-        leaderboard.loc[time_per_row_df_val.index, 'pred_time_val'] = time_per_row_df_val['pred_time_test'] * len(val_data)
-        leaderboard.loc[time_per_row_df_val.index, 'pred_time_val_marginal'] = time_per_row_df_val['pred_time_test_marginal'] * len(val_data)
-        leaderboard = leaderboard.reset_index()
-        print('[DEBUG] after build PWD, leaderboard info')
+        ## Get model_pred_proba_dict, and pred_time_margianl first;
+        ## because step 1 construct new weighted_ensemble models
+        genuine_ts = time.time()
+        leaderboard, _ = get_genunie_pred_val_time_leaderboard(self, raw_data_for_infer_speed, len(val_data[0]), infer_limit_batch_size)
+        genuine_te = time.time()
+        print(f'[DEBUG] get genuine speed cost {genuine_te-genuine_ts} seconds')
+        print('[DEBUG] after build PWD, another round of get genuine speed.')
         print(leaderboard)
         cascade_model_all_predecessors = get_all_predecessor_model_names(self, cascade_model_seq, include_self=True)
         model_pred_proba_dict, model_pred_time_marginal_dict, _ = get_models_pred_proba_on_val(
@@ -3460,11 +3449,19 @@ class TabularPredictor:
         print(f'after post_process, cascade_config={cascade_config}')
         print(hpo_reward_func(leaderboard[COLS_REPrt].set_index(MODEL)))    # TODO: debug
         #clean_partial_weighted_ensembles(predictor)
-        # TODO: DEBUG
+        # pack extra info into return cascade configure
         simulated_val_infer_time_per_row = cascade_config.pred_time_val / len(val_data[0])
         simulated_val_infer_time_per_row_w_transform = simulated_val_infer_time_per_row + time_per_row_transform_val
-        print(f'[DEBUG] chosen cascade simulate_val_time_per_row: {simulated_val_infer_time_per_row}, time_per_row w feature transform {simulated_val_infer_time_per_row_w_transform}')
-        return cascade_config
+        te = time.time()
+        cascade_fit_time = te - ts
+        ret_cascade_config = CascadeConfig(model=cascade_config.model, thresholds=cascade_config.thresholds,
+                pred_time_val=cascade_config.pred_time_val, score_val=cascade_config.score_val, 
+                hpo_score=cascade_config.hpo_score, hpo_func_name=cascade_config.hpo_func_name,
+                fit_time=cascade_fit_time, 
+                pred_time_val_per_row=simulated_val_infer_time_per_row_w_transform,
+                feat_trans_time_per_row=time_per_row_transform_val, 
+                infer_limit=infer_limit, infer_limit_batch_size=infer_limit_batch_size)
+        return ret_cascade_config
 
     def do_infer_with_cascade_conf(
             self,
@@ -3486,11 +3483,11 @@ class TabularPredictor:
             if learner.problem_type == BINARY:
                 pred_proba = LabelCleanerMulticlassToBinary.convert_binary_proba_to_multiclass_proba(pred_proba)
             te = time.time()
+            print(f'[DEBUG] feature_transform time {te_transform-ts}, feat trans time per row {(te_transform-ts)/len(test_data_sampled)}')
         else:
             ts = time.time()
             pred_proba = self.predict_proba(test_data_sampled, model=cascade_config.model[0])
             te = time.time()
-        print(f'[DEBUG] feature_transform time {te_transform-ts}, feat trans Vrow per sec {(te_transform-ts)/len(test_data_sampled)}')
         return te-ts, pred_proba
     # End Cascade Related Scripts
     # =======

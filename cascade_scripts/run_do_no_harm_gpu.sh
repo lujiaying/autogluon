@@ -36,10 +36,11 @@ exp_name="ag-${date}_${dataset_name}_${presets}_1h_MM"
 for dataset_name in "CPP-a385488d"; do
     python -m cascade_scripts.do_no_harm \
         --do_multimodal \
+        --infer_limit_batch_size 1000 \
         --predictor_presets ${presets} \
         --time_limit 3600 \
         --dataset_name ${dataset_name} \
-        --exp_result_save_path ExpResults/${dataset_name}/${exp_name}_goodness_adjust_weights.csv \
+        --exp_result_save_path ExpResults/${dataset_name}/${exp_name}_debug.csv \
         --model_save_path AutogluonModels/${dataset_name}/ag-${date}_${dataset_name}_${presets}_MultiModal
 done
 # --hpo_score_func_name ACCURACY --infer_time_limit 4e-4 \

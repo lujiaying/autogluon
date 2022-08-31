@@ -1068,8 +1068,6 @@ def main(args: argparse.Namespace):
             infer_limit_batch_size=infer_limit_batch_size,
         )
         if do_multimodal:
-            infer_limit_batch_size = 1000
-            print(f'do_multimodal, so infer_limit_batch_size = {infer_limit_batch_size}')
             # currently support PetFinder or CPP
             # update several fit kwargs
             hyperparameters = get_hyperparameter_config('multimodal')
@@ -1100,13 +1098,48 @@ def main(args: argparse.Namespace):
             predictor.fit(**fit_kwargs)
         else:
             predictor = TabularPredictor.load(model_save_path, require_version_match=False)
+
+        # snippet for GPU model
+        clean_partial_weighted_ensembles(predictor)
+        print('load models from disk DONE!!')
+        ts = time.time()
+        predictor.persist_models('all')
+        te = time.time()
+        print(f'persist_models() costs {ts-te} secs')
+        predictor.leaderboard()
+        ts = time.time()
+        time_per_row_df_val, time_per_row_transform_val \
+            = get_model_true_infer_speed_per_row_batch(data=train_data, predictor=predictor, batch_size=1000, 
+                                                       repeats=n_repeats, silent=True)
+        te = time.time()
+        print(f'get_model_true_infer_speed() costs {ts-te} secs')
+        exit(0)
         
         test_data_sampled = sample_df_for_time_func(df=test_data, sample_size=infer_limit_batch_size, 
                                             max_sample_size=infer_limit_batch_size)
 
         result_df = []
         # use predictor.fit_cascade()
-        infer_limit = None
+        infer_limit = 0.01
+        print(f'[DEBUG] infer_limit={infer_limit}, infer_limit_batch_size={infer_limit_batch_size}')
+        hyperparameter_cascade = asdict(F2SP_Preset(searcher='Random'))
+        cascade_config = predictor.fit_cascade(raw_data_for_infer_speed=train_data, infer_limit=infer_limit, infer_limit_batch_size=infer_limit_batch_size,
+                                               hyperparameter_cascade=hyperparameter_cascade)
+        print(f'cascade_config={cascade_config}')
+        # DEBUG to see whether simulation is close to reality
+        test_data_sampled = test_data.sample(n=infer_limit_batch_size, replace=True, random_state=0)
+        pred_time_test_list = []
+        for i in range(n_repeats):
+            pred_time_test, _ = predictor.do_infer_with_cascade_conf(cascade_config, test_data_sampled)
+            pred_time_test_list.append(pred_time_test)
+        pred_time_test = np.mean(pred_time_test_list)
+        pred_time_test_per_row = pred_time_test / infer_limit_batch_size
+        _, pred_proba = predictor.do_infer_with_cascade_conf(cascade_config, test_data)
+        cascade_test_metrics = predictor.evaluate_predictions(y_true=test_data[label], y_pred=pred_proba, silent=True)
+        score_test = cascade_test_metrics[predictor.eval_metric.name]
+        print(f'[INFO] cascade infer_time sec/row={pred_time_test_per_row}, {predictor.eval_metric.name}={score_test}')
+        print(f'cascade pred_time_test={pred_time_test}')
+        exit(0)
         #for infer_limit in [None, 0.1, 0.05, 0.01, 0.001]:
         for goodness_weights in [(-1.0, 1e-4), (-1.0, 1e-5)]:
             for cascade_algo_name in ['F2S+']:
@@ -1343,7 +1376,7 @@ if __name__ == '__main__':
             help='infer time limit in seconds per row.')
     parser.add_argument('--ag_fit_infer_limit', type=float, default=None,
             help='infer time limit in seconds per row for AG itself!! Not cascade.')
-    parser.add_argument('--infer_limit_batch_size', type=float, default=DEFAULT_INFER_BATCH_SIZE,
+    parser.add_argument('--infer_limit_batch_size', type=int, default=DEFAULT_INFER_BATCH_SIZE,
             help='batch size to use when predicting in bulk.')
     parser.add_argument('--exec_single_model', action='store_true')
     args = parser.parse_args()

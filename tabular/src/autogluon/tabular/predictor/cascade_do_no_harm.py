@@ -1,5 +1,6 @@
 from codecs import namereplace_errors
 from enum import Enum
+from optparse import Option
 from statistics import mode
 from typing import List, Tuple, Dict, Optional, Union, Set, Callable
 from functools import partial, reduce
@@ -42,10 +43,15 @@ INFER_UTIL_N_REPEATS = 2
 class CascadeConfig:
     model: Tuple[str]         # cascade model sequence. Length=N
     thresholds: Tuple[float]  # regarding short-circuit/early-exit thresholds. Length=N-1
-    pred_time_val: float      # simulated pred_time_val w/o feature transform time
+    pred_time_val: float      # simulated over_all pred_time_val w/o feature transform time
     score_val: float          # simulates score_val
     hpo_score: float
     hpo_func_name: Optional[str] = None
+    fit_time: Optional[float] = None
+    pred_time_val_per_row: Optional[float] = None
+    feat_trans_time_per_row: Optional[float] = None
+    infer_limit: Optional[float] = None
+    infer_limit_batch_size: Optional[int] = None
 
 
 @dataclass(frozen=True)
@@ -250,10 +256,10 @@ class AGCasAccuracy(AbstractCasHpoFunc):
         self.metric_name = metric_name
         self.infer_time_ubound = infer_time_ubound   # the overall val time upper bound
         # the penalty: $f(t) = \alpha * (1 + e^{-(t - \mu) / \beta}) ^ {-1}$
-        self.sigmoid_alpha = -2.0   # we will add penalty when time exceeds, assume roc, acc.
-        self.sigmoid_mu = infer_time_ubound * 1.1  # when time reach mean, penalty = scale / 2
-        # we want $f(\tau) = \alpha / 200 = -0.01$ for \tau is the uboud
-        self.sigmoid_beta = - (infer_time_ubound - self.sigmoid_mu) / np.log(199)
+        self.sigmoid_alpha = -20.0   # we will add penalty when time exceeds, assume roc, acc.
+        self.sigmoid_mu = infer_time_ubound * 0.8  # when time reach mean, penalty = scale / 2
+        # we want $f(\tau) = \alpha * 0.9 = -0.01$ when \tau is the uboud
+        self.sigmoid_beta = - (infer_time_ubound - self.sigmoid_mu) / np.log(1 / 0.9 - 1)
         assert self.sigmoid_beta > 0
 
     def cal_penalty(self, t: pd.Series) -> np.ndarray:
@@ -1077,12 +1083,14 @@ def prune_cascade_config(chosen_cascd_config: CascadeConfig, problem_type: str):
     for idx, threshold in enumerate(cascd_config.thresholds):
         if threshold != 1.0:
             mem_idx_kept.append(idx)
-    if len(mem_idx_kept) != len(cascd_config.model):
+    if len(mem_idx_kept) != len(cascd_config.thresholds):
         model_kept = [m for i, m in enumerate(cascd_config.model) if i in mem_idx_kept]
+        model_kept.append(cascd_config.model[-1])  # len(thresholds) + 1 = len(model)
         thresholds_kept = tuple([th for i, th in enumerate(cascd_config.thresholds) if i in mem_idx_kept])
         if len(thresholds_kept) <= 0:
             # len=1 cascade casse
             thresholds_kept = tuple([0.0])
+        assert len(model_kept) == len(thresholds_kept) + 1
         cascd_config_pruned = CascadeConfig(model=model_kept, thresholds=thresholds_kept,
                 pred_time_val=cascd_config.pred_time_val, score_val=cascd_config.score_val, 
                 hpo_score=cascd_config.hpo_score, hpo_func_name=cascd_config.hpo_func_name
@@ -1111,3 +1119,21 @@ def hpo_post_process(predictor, chosen_cascd_config: CascadeConfig,
                     pred_time_val=best_row[PRED_TIME], score_val=best_row[PERFORMANCE], hpo_score=best_row[SCORE],
                     )
         return single_mem_cascd_config
+
+
+def get_genunie_pred_val_time_leaderboard(predictor, raw_data_for_infer_speed: pd.DataFrame,
+                                          val_data_size: int, infer_limit_batch_size: int, 
+                                          n_repeats: int = None) -> pd.DataFrame:
+    if n_repeats is None:
+        global INFER_UTIL_N_REPEATS
+        n_repeats = INFER_UTIL_N_REPEATS 
+    leaderboard = predictor.leaderboard(silent=True)
+    # val_data[0] internal feature, val_data[1] internal label
+    time_per_row_df_val, time_per_row_transform_val \
+            = get_model_true_infer_speed_per_row_batch(data=raw_data_for_infer_speed, predictor=predictor, batch_size=infer_limit_batch_size, 
+                                                       repeats=n_repeats, silent=True)
+    leaderboard = leaderboard.set_index(MODEL)
+    leaderboard.loc[time_per_row_df_val.index, 'pred_time_val'] = time_per_row_df_val['pred_time_test'] * val_data_size
+    leaderboard.loc[time_per_row_df_val.index, 'pred_time_val_marginal'] = time_per_row_df_val['pred_time_test_marginal'] * val_data_size
+    leaderboard = leaderboard.reset_index()
+    return leaderboard, (time_per_row_df_val, time_per_row_transform_val)

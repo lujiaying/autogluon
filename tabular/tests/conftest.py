@@ -3,7 +3,9 @@ import os
 import shutil
 import uuid
 import pytest
-from typing import List
+import time
+from typing import List, Union
+import numpy as np
 
 from autogluon.core.utils import download, unzip
 from autogluon.core.constants import BINARY, MULTICLASS, REGRESSION
@@ -188,9 +190,8 @@ class FitHelper:
     @staticmethod
     def check_cascade_speed_accuracy_simulation(dataset_name: str, fit_args: dict, cascade: List[str], cascade_thresholds: List[float],
                                                 train_sample_size: int = 1000, infer_limit_batch_size: int = 100000, 
-                                                n_repeats: int = 10, delete_directory: bool = True):
-        import time
-        import numpy as np
+                                                n_repeats: int = 10, simulation_time_diff: float = 0.1, 
+                                                delete_directory: bool = True):
         from autogluon.core.utils.infer_utils import get_model_true_infer_speed_per_row_batch
         from autogluon.tabular.predictor.cascade_do_no_harm import get_cascade_metric_and_time_by_threshold, get_all_predecessor_model_names
         directory_prefix = './datasets/'
@@ -239,6 +240,7 @@ class FitHelper:
         time_per_row_df, time_per_row_transform = get_model_true_infer_speed_per_row_batch(data=test_data_sampled, 
                                                     predictor=predictor, batch_size=infer_limit_batch_size,
                                                     repeats=n_repeats)
+        print(f'[DEBUG] time_per_row_df={time_per_row_df}')
         simu_model_pred_proba_dict = {}
         simu_model_pred_time_dict = {}   # stores marginal time w/o feat trans predcting all test_data
         for index, row in time_per_row_df.iterrows():
@@ -250,14 +252,54 @@ class FitHelper:
                                                     simu_model_pred_proba_dict, simu_model_pred_time_dict, predictor)
         simu_time_no_trans_prow = simu_time_no_trans / len(test_data)
         simu_time_prow = simu_time_no_trans_prow + time_per_row_transform
-        # add assertion
+        # check whether simulation aligns with reality
         print(f'ACTUAL infer sec/row={actual_infer_time_prow}, feat trans sec/row={actual_feat_trans_time_prow}, infer_batch_size={infer_limit_batch_size}')
         print(f'ACTUAL eval metrics: {actual_eval_metrics}')
         print(f'SIMULATION infer_time sec/row={simu_time_prow}, feat trans sec/row={time_per_row_transform}, {predictor.eval_metric.name}={simu_score}')
-        func_check_closeness = lambda x, y: abs(x - y) <= 0.25 * max(x, y)
+        func_check_closeness = lambda x, y: abs(x - y) <= simulation_time_diff * max(x, y)
         assert simu_score == actual_eval_metrics[predictor.eval_metric.name]
         assert func_check_closeness(time_per_row_transform, actual_feat_trans_time_prow)
         assert func_check_closeness(simu_time_prow, actual_infer_time_prow)
+        # clean up everything
+        if delete_directory is True:
+            shutil.rmtree(predictor.path, ignore_errors=True)  # Delete AutoGluon output directory to ensure runs' information has been removed.
+
+    @staticmethod
+    def check_fit_cascade_infer_limit(dataset_name: str, fit_args: dict, 
+                                      infer_limit: float, infer_limit_batch_size: int, 
+                                      hyperparameter_cascade: Union[str, dict],
+                                      train_sample_size: int = 1000, 
+                                      n_repeats: int = 10, cascade_time_diff: float = 0.2, 
+                                      delete_directory: bool = True):
+        directory_prefix = './datasets/'
+        train_data, test_data, dataset_info = DatasetLoaderHelper.load_dataset(name=dataset_name, directory_prefix=directory_prefix)
+        label = dataset_info['label']
+        save_path = os.path.join(directory_prefix, dataset_name, f'AutogluonOutput_{uuid.uuid4()}')
+        init_args = dict(
+            label=label,
+            path=save_path,
+        )
+        predictor = FitHelper.fit_dataset(train_data, init_args, fit_args, sample_size=train_sample_size)
+        predictor.persist_models('all')
+        predictor.leaderboard()
+        # fit cascade
+        chosen_cascade_conf = predictor.fit_cascade(train_data, infer_limit, infer_limit_batch_size, hyperparameter_cascade=hyperparameter_cascade)
+        print(f'[INFO] Get return cascade config={chosen_cascade_conf}')
+        # do infer
+        ## get genuine infer speed with infer_limit_batch_size
+        test_data_sampled = test_data.sample(n=infer_limit_batch_size, replace=True, random_state=0)
+        pred_time_test_list = []
+        for i in range(n_repeats):
+            pred_time_test, _ = predictor.do_infer_with_cascade_conf(chosen_cascade_conf, test_data_sampled)
+            pred_time_test_list.append(pred_time_test)
+        pred_time_test = np.mean(pred_time_test_list)
+        pred_time_test_per_row = pred_time_test / infer_limit_batch_size
+        _, pred_proba = predictor.do_infer_with_cascade_conf(chosen_cascade_conf, test_data)
+        cascade_test_metrics = predictor.evaluate_predictions(y_true=test_data[label], y_pred=pred_proba, silent=True)
+        score_test = cascade_test_metrics[predictor.eval_metric.name]
+        print(f'[INFO] cascade infer_time sec/row={pred_time_test_per_row}, {predictor.eval_metric.name}={score_test}')
+        print(f'cascade pred_time_test={pred_time_test}')
+        assert pred_time_test_per_row <= (1 + cascade_time_diff) * infer_limit
         # clean up everything
         if delete_directory is True:
             shutil.rmtree(predictor.path, ignore_errors=True)  # Delete AutoGluon output directory to ensure runs' information has been removed.
