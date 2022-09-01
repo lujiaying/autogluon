@@ -421,12 +421,12 @@ def get_cascade_model_sequence_by_val_marginal_time(predictor,
         valid_cascade_models = predictor._trainer.get_minimum_model_set(best_model_name)
         model_sequence = [m for m in model_sequence if m in valid_cascade_models]
     if build_pwe_flag:
-        print(f'Fast-to-slow: before build_pwe, {model_sequence=}')
+        print(f'Fast-to-slow: before build_pwe, model_sequence={model_sequence}')
         model_sequence = translate_cascade_sequence_to_WE_version(model_sequence, predictor)
-        print(f'Fast-to-slow: after build_pwe, {model_sequence=}')
+        print(f'Fast-to-slow: after build_pwe, model_sequence={model_sequence}')
     leaderboard = predictor.leaderboard(silent=True).set_index(MODEL)
     if better_than_prev:
-        #print(f'before build pareto-frontier: {model_sequence=}')
+        #print(f'before build pareto-frontier: model_sequence={model_sequence}')
         tmp = []
         max_val_score = 0.0
         for model in model_sequence:
@@ -438,7 +438,7 @@ def get_cascade_model_sequence_by_val_marginal_time(predictor,
             max_val_score = val_score
             tmp.append(model)
         model_sequence = tmp
-        # print(f'after build pareto-frontier: {model_sequence=}')
+        # print(f'after build pareto-frontier: model_sequence={model_sequence}')
     return model_sequence
 
 
