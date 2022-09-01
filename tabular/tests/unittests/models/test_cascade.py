@@ -126,13 +126,22 @@ def test_fit_cascade_meet_infer_limit_binary_F2SP(fit_helper):
         },
     )
     dataset_name = 'adult'
+    # Test Fast-to-Slow default params 
+    hyperparameter_cascade = {
+            'cascade_algo': 'F2S+',
+            'num_trials': 200,
+    }
+    infer_limit_batch_size = 10000
+    infer_limit = None
+    fit_helper.check_fit_cascade_infer_limit(dataset_name, fit_args, infer_limit, infer_limit_batch_size, 
+                                             hyperparameter_cascade=hyperparameter_cascade)
     # Test Fast-to-Slow with Random Searcher
     hyperparameter_cascade = {
             'cascade_algo': 'F2S+',
             'num_trials': 200,
             'searcher': 'Random',
             'hpo_score_func': 'eval_metric',
-            'hpo_score_func_kwargs': None,
+            'hpo_score_func_kwargs': {},
     }
     for infer_limit_batch_size, infer_limit in [(10000, 1e-5), (100000, 5e-6)]:
         fit_helper.check_fit_cascade_infer_limit(dataset_name, fit_args, infer_limit, infer_limit_batch_size, 
@@ -143,7 +152,7 @@ def test_fit_cascade_meet_infer_limit_binary_F2SP(fit_helper):
             'num_trials': 200,
             'searcher': 'TPE',
             'hpo_score_func': 'eval_metric',
-            'hpo_score_func_kwargs': None,
+            'hpo_score_func_kwargs': {},
     }
     for infer_limit_batch_size, infer_limit in [(10000, 1e-5), (100000, 5e-6)]:
         fit_helper.check_fit_cascade_infer_limit(dataset_name, fit_args, infer_limit, infer_limit_batch_size, 
@@ -162,6 +171,15 @@ def test_fit_cascade_meet_infer_limit_binary_F2SP_hq(fit_helper):
         num_bag_sets=2,
     )
     dataset_name = 'adult'
+    # Test Fast-to-Slow default params 
+    hyperparameter_cascade = {
+            'cascade_algo': 'F2S+',
+            'num_trials': 200,
+    }
+    infer_limit_batch_size = 10000
+    infer_limit = None
+    fit_helper.check_fit_cascade_infer_limit(dataset_name, fit_args, infer_limit, infer_limit_batch_size, 
+                                             hyperparameter_cascade=hyperparameter_cascade)
     # Test Fast-to-Slow with Random Searcher
     hyperparameter_cascade = {
             'cascade_algo': 'F2S+',
@@ -195,6 +213,16 @@ def test_fit_cascade_meet_infer_limit_multiclass_F2SP(fit_helper):
         },
     )
     dataset_name = 'covertype_small'
+    # Test Fast-to-Slow default params 
+    hyperparameter_cascade = {
+            'cascade_algo': 'F2S+',
+            'num_trials': 200,
+    }
+    infer_limit_batch_size = 10000
+    infer_limit = None
+    fit_helper.check_fit_cascade_infer_limit(dataset_name, fit_args, infer_limit, infer_limit_batch_size, 
+                                             hyperparameter_cascade=hyperparameter_cascade,
+                                             train_sample_size=3000)
     # Test Fast-to-Slow with Random Searcher
     hyperparameter_cascade = {
             'cascade_algo': 'F2S+',
@@ -233,6 +261,16 @@ def test_fit_cascade_meet_infer_limit_multiclass_F2SP_hq(fit_helper):
         num_bag_sets=2,
     )
     dataset_name = 'covertype_small'
+    # Test Fast-to-Slow default params 
+    hyperparameter_cascade = {
+            'cascade_algo': 'F2S+',
+            'num_trials': 200,
+    }
+    infer_limit_batch_size = 10000
+    infer_limit = None
+    fit_helper.check_fit_cascade_infer_limit(dataset_name, fit_args, infer_limit, infer_limit_batch_size, 
+                                             hyperparameter_cascade=hyperparameter_cascade,
+                                             train_sample_size=3000)
     # Test Fast-to-Slow with Random Searcher
     hyperparameter_cascade = {
             'cascade_algo': 'F2S+',

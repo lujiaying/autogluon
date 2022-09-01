@@ -6,7 +6,7 @@ from typing import List, Tuple, Dict, Optional, Union, Set, Callable
 from functools import partial, reduce
 import operator
 import itertools
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass, asdict, field
 
 import pandas as pd
 import numpy as np
@@ -60,7 +60,7 @@ class F2SP_Preset:
     num_trials: int = 800
     searcher: str = 'TPE'
     hpo_score_func: str = 'ag_goodness'
-    hpo_score_func_kwargs: dict = None
+    hpo_score_func_kwargs: dict = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -69,7 +69,7 @@ class GreedyP_Preset:
     num_trials: int = 500
     searcher: str = 'TPE'
     hpo_score_func: str = 'ag_goodness'
-    hpo_score_func_kwargs: dict = None
+    hpo_score_func_kwargs: dict = field(default_factory=dict)
     each_config_num_trials: int = 50
 
 
@@ -77,7 +77,6 @@ class HPOScoreFunc(Enum):
     GOODNESS = 'GOODNESS'   # a metric considering both accuracy and speed
     TIME_BOUND_PERFORMANCE = 'TIME_BOUND_PERFORMANCE'   # maximize performance given min speed/infer time limit
     ACCURACY = 'ACCURACY'   # maximize accuracy given min speed/infer time limit; TODO: delete
-    # SPEED = 'SPEED'         # maximize speed given min accuracy
 
 
 class AbstractCasHpoFunc:

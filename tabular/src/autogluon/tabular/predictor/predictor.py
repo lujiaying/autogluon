@@ -3372,9 +3372,16 @@ class TabularPredictor:
             _hyperparameter_cascade = asdict(GreedyP_Preset())
         else:
             # TODO: add validation function
-            _hyperparameter_cascade = hyperparameter_cascade
+            assert isinstance(hyperparameter_cascade, dict) is True
+            assert hyperparameter_cascade['cascade_algo'] in ['F2S+', 'Greedy+']
+            if hyperparameter_cascade['cascade_algo'] == 'F2S+':
+                _hyperparameter_cascade = asdict(F2SP_Preset())
+            elif hyperparameter_cascade['cascade_algo'] == 'Greedy+':
+                _hyperparameter_cascade = asdict(GreedyP_Preset())
+            else:
+                raise ValueError(f'Not support hyperparameter_cascade={hyperparameter_cascade}')
+            _hyperparameter_cascade.update(hyperparameter_cascade)
             # currently only support run one cascade algorithm one time
-            # because we will clean up fitted WE models afterwards
 
         print(f'Now execute {_hyperparameter_cascade}')
         # Step0: prepare hpo_score_func
