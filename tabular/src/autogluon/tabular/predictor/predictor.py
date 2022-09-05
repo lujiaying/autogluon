@@ -6,6 +6,7 @@ import os
 import pprint
 import time
 from typing import Union, Dict, Tuple
+from autogluon.tabular import predictor
 
 import networkx as nx
 import numpy as np
@@ -3273,7 +3274,7 @@ class TabularPredictor:
     def fit_cascade(self, raw_data_for_infer_speed: pd.DataFrame,
                     infer_limit: float = None, infer_limit_batch_size: int = None, 
                     hyperparameter_cascade: Union[str, dict] = 'F2S+',
-                    max_memory: float=0.1,
+                    max_memory: float=0.35,
                     ) -> CascadeConfig:
         """
         raw_data_for_infer_speed: pd.DataFrame,
@@ -3346,7 +3347,6 @@ class TabularPredictor:
         from .cascade_do_no_harm import clean_partial_weighted_ensembles, helper_get_val_data, hpo_post_process
         from .cascade_do_no_harm import get_cascade_model_sequence_by_val_marginal_time, get_cascade_model_sequence_by_greedy_search
         from .cascade_do_no_harm import hpo_multi_params_random_search, hpo_multi_params_TPE, get_genunie_pred_val_time_leaderboard
-        from autogluon.core.utils.infer_utils import get_model_true_infer_speed_per_row_batch
         # set up vars
         if infer_limit_batch_size is None:
             infer_limit_batch_size = 10000  # use default
@@ -3430,8 +3430,12 @@ class TabularPredictor:
         genuine_te = time.time()
         print(f'[DEBUG] get genuine speed cost {genuine_te-genuine_ts} seconds')
         print('[DEBUG] after build PWD, another round of get genuine speed.')
-        print(leaderboard)
+        with pd.option_context('display.max_rows', None, 'display.max_columns', None, 'display.width', 1000):
+            print(leaderboard)
+        self.unpersist_models('all')
+        self.persist_models(cascade_model_seq, max_memory=max_memory)
         cascade_model_all_predecessors = get_all_predecessor_model_names(self, cascade_model_seq, include_self=True)
+        print(f'[DEBUG] get_all_predecessor_model_names {cascade_model_all_predecessors}')
         model_pred_proba_dict, model_pred_time_marginal_dict, _ = get_models_pred_proba_on_val(
             self, list(cascade_model_all_predecessors), infer_limit_batch_size, leaderboard
         )

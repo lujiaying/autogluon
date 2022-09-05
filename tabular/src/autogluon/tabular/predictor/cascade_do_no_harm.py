@@ -290,7 +290,9 @@ def get_all_predecessor_model_names(predictor, model_name: Union[str, List[str]]
     print(f'[DEBUG in get_all_predecessor_model_names()] ends {result=} for in {model_name=}')
     """
     DAG = predictor._trainer.model_graph
+    #print(f'DAG, {DAG}')
     queue = [model_name] if isinstance(model_name, str) else model_name.copy()
+    queue_added = set(queue)   # avoid infinite queue loop
     result = set()
     if include_self:
         result.update(queue)
@@ -298,7 +300,9 @@ def get_all_predecessor_model_names(predictor, model_name: Union[str, List[str]]
         cur_model = queue.pop(0)
         for predecessor in DAG.predecessors(cur_model):
             result.add(predecessor)
-            queue.append(predecessor)
+            if predecessor not in queue_added:
+                queue.append(predecessor)
+                queue_added.add(predecessor)
     return result
 
 

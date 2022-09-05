@@ -1098,9 +1098,9 @@ def main(args: argparse.Namespace):
             predictor.fit(**fit_kwargs)
         else:
             predictor = TabularPredictor.load(model_save_path, require_version_match=False)
-
-        # snippet for GPU model
         clean_partial_weighted_ensembles(predictor)
+
+        """
         print('load models from disk DONE!!')
         ts = time.time()
         predictor.persist_models('all')
@@ -1114,17 +1114,18 @@ def main(args: argparse.Namespace):
         te = time.time()
         print(f'get_model_true_infer_speed() costs {ts-te} secs')
         exit(0)
+        """
         
         test_data_sampled = sample_df_for_time_func(df=test_data, sample_size=infer_limit_batch_size, 
                                             max_sample_size=infer_limit_batch_size)
-
-        result_df = []
-        # use predictor.fit_cascade()
-        infer_limit = 0.01
-        print(f'[DEBUG] infer_limit={infer_limit}, infer_limit_batch_size={infer_limit_batch_size}')
-        hyperparameter_cascade = asdict(F2SP_Preset(searcher='Random'))
-        cascade_config = predictor.fit_cascade(raw_data_for_infer_speed=train_data, infer_limit=infer_limit, infer_limit_batch_size=infer_limit_batch_size,
-                                               hyperparameter_cascade=hyperparameter_cascade)
+        preset = F2SP_Preset()
+        fit_cascade_params = {
+                'raw_data_for_infer_speed': test_data,
+                'infer_limit': infer_limit,
+                'infer_limit_batch_size': infer_limit_batch_size,
+                'hyperparameter_cascade': asdict(preset),
+            }
+        cascade_config = predictor.fit_cascade(**fit_cascade_params)
         print(f'cascade_config={cascade_config}')
         # DEBUG to see whether simulation is close to reality
         test_data_sampled = test_data.sample(n=infer_limit_batch_size, replace=True, random_state=0)
