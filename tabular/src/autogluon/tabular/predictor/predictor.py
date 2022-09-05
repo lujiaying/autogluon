@@ -3273,7 +3273,7 @@ class TabularPredictor:
     def fit_cascade(self, raw_data_for_infer_speed: pd.DataFrame,
                     infer_limit: float = None, infer_limit_batch_size: int = None, 
                     hyperparameter_cascade: Union[str, dict] = 'F2S+',
-                    max_memory: float=0.5,
+                    max_memory: float=0.1,
                     ) -> CascadeConfig:
         """
         raw_data_for_infer_speed: pd.DataFrame,
@@ -3360,7 +3360,7 @@ class TabularPredictor:
                 raw_data_for_infer_speed, len(val_data[0]), infer_limit_batch_size)
         genuine_te = time.time()
         print(f'[DEBUG] get genuine speed cost {genuine_te-genuine_ts} seconds')
-        print('Get genuine speed/val_time per specified infer_limit_batch_size, only for can_infer models')
+        print(f'Get genuine speed/val_time per infer_limit_batch_size={infer_limit_batch_size}, only for can_infer models')
         with pd.option_context('display.max_rows', None, 'display.max_columns', None, 'display.width', 1000):
             print(leaderboard)
         # prepare hpo score functions for later usage
