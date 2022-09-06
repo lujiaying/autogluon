@@ -3432,8 +3432,6 @@ class TabularPredictor:
         print('[DEBUG] after build PWD, another round of get genuine speed.')
         with pd.option_context('display.max_rows', None, 'display.max_columns', None, 'display.width', 1000):
             print(leaderboard)
-        self.unpersist_models('all')
-        self.persist_models(cascade_model_seq, max_memory=max_memory)
         cascade_model_all_predecessors = get_all_predecessor_model_names(self, cascade_model_seq, include_self=True)
         print(f'[DEBUG] get_all_predecessor_model_names {cascade_model_all_predecessors}')
         model_pred_proba_dict, model_pred_time_marginal_dict, _ = get_models_pred_proba_on_val(

@@ -473,11 +473,12 @@ def get_models_pred_proba_on_val(predictor, models: List[str],
     else:
         # models Not use bagging strategy
         model_pred_proba_dict = trainer.get_model_pred_proba_dict(val_data[0], models=models)
+    assert leaderboard is not None
+    """
+    # TODO: need to fix this, because val_data internal NOT get correct feature_transfer time
     # get genuine infer_time
     val_label_ori = predictor.transform_labels(val_data[1], inverse=True)
     val_data_wlabel = pd.concat([val_data[0], val_label_ori], axis=1)
-    # TODO: need to fix this, because val_data internal NOT get correct feature_transfer time
-    assert leaderboard is not None
     if leaderboard is None:
         global INFER_UTIL_N_REPEATS
         n_repeats = INFER_UTIL_N_REPEATS
@@ -489,6 +490,10 @@ def get_models_pred_proba_on_val(predictor, models: List[str],
         # !! assume leaderboard contains genuine infer_time (already scaled with val data size)
         leaderboard = leaderboard.copy().set_index('model')
         model_pred_time_marginal_dict = {m: leaderboard.loc[m]['pred_time_val_marginal'] for m in models}
+    """
+    # !! assume leaderboard contains genuine infer_time (already scaled with val data size)
+    leaderboard = leaderboard.copy().set_index('model')
+    model_pred_time_marginal_dict = {m: leaderboard.loc[m]['pred_time_val_marginal'] for m in models}
     return model_pred_proba_dict, model_pred_time_marginal_dict, val_data
 
 
