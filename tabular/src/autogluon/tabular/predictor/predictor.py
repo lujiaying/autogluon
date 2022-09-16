@@ -3452,10 +3452,10 @@ class TabularPredictor:
                     )
         else:
             raise ValueError(f'not support searcher={_hyperparameter_cascade["searcher"]}')
-        print(f'searcher={_hyperparameter_cascade["searcher"]} gets best cascade_config={cascade_config}')
+        print(f'[INFO] searcher={_hyperparameter_cascade["searcher"]} gets best cascade_config={cascade_config}')
         # post process in case cascade is worse than single model
         cascade_config = hpo_post_process(self, cascade_config, hpo_reward_func, leaderboard)
-        print(f'after post_process, cascade_config={cascade_config}')
+        print(f'[INFO] after post_process, cascade_config={cascade_config}')
         print(hpo_reward_func(leaderboard[COLS_REPrt].set_index(MODEL)))    # TODO: debug
         #clean_partial_weighted_ensembles(predictor)
         # pack extra info into return cascade configure
@@ -3483,7 +3483,7 @@ class TabularPredictor:
             learner = self._learner
             trainer = self._trainer
             test_data_X = self.transform_features(test_data_sampled)
-            te_transform = time.time()   # TODO: debug
+            te_transform = time.time()
             model_pred_proba_dict = trainer.get_model_pred_proba_dict(
                     test_data_X, cascade_model_seq, fit=False,
                     cascade=True, cascade_threshold=list(cascade_config.thresholds),

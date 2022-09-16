@@ -744,12 +744,12 @@ def hpo_multi_params_TPE(predictor, cascade_model_seq: List[str],
         val_data, _ = helper_get_val_data(predictor)
     # no need to proceed to hpo process
     if len(cascade_model_seq) == 1:
-        thresholds = (ts_min)
+        thresholds = ()
         metric_value, infer_time = get_cascade_metric_and_time_by_threshold(val_data, thresholds,
                 cascade_model_seq, model_pred_proba_dict, model_pred_time_marginal_dict, predictor)
         cascade_config = CascadeConfig(
             model=tuple(cascade_model_seq),
-            thresholds=(ts_min),
+            thresholds=thresholds,
             score_val=metric_value,
             pred_time_val=infer_time,
             hpo_score=None,
@@ -1073,7 +1073,7 @@ def prune_cascade_config(chosen_cascd_config: CascadeConfig, problem_type: str):
     if defin_exit_idx is not None:
         if defin_exit_idx == 0:
             # length=1 cascade case
-            cascd_config = CascadeConfig(model=tuple([chosen_cascd_config.model[0]]), thresholds=tuple([min_threshold]),
+            cascd_config = CascadeConfig(model=tuple([chosen_cascd_config.model[0]]), thresholds=(),
                     pred_time_val=chosen_cascd_config.pred_time_val, score_val=chosen_cascd_config.score_val, 
                     hpo_score=chosen_cascd_config.hpo_score, hpo_func_name=chosen_cascd_config.hpo_func_name
                     ) 
@@ -1095,11 +1095,8 @@ def prune_cascade_config(chosen_cascd_config: CascadeConfig, problem_type: str):
         model_kept = [m for i, m in enumerate(cascd_config.model) if i in mem_idx_kept]
         model_kept.append(cascd_config.model[-1])  # len(thresholds) + 1 = len(model)
         thresholds_kept = tuple([th for i, th in enumerate(cascd_config.thresholds) if i in mem_idx_kept])
-        if len(thresholds_kept) <= 0:
-            # len=1 cascade casse
-            thresholds_kept = tuple([0.0])
         assert len(model_kept) == len(thresholds_kept) + 1
-        cascd_config_pruned = CascadeConfig(model=model_kept, thresholds=thresholds_kept,
+        cascd_config_pruned = CascadeConfig(model=tuple(model_kept), thresholds=thresholds_kept,
                 pred_time_val=cascd_config.pred_time_val, score_val=cascd_config.score_val, 
                 hpo_score=cascd_config.hpo_score, hpo_func_name=cascd_config.hpo_func_name
                 ) 

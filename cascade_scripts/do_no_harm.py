@@ -1119,27 +1119,28 @@ def main(args: argparse.Namespace):
         test_data_sampled = sample_df_for_time_func(df=test_data, sample_size=infer_limit_batch_size, 
                                             max_sample_size=infer_limit_batch_size)
         preset = F2SP_Preset()
-        fit_cascade_params = {
-                'raw_data_for_infer_speed': test_data,
-                'infer_limit': infer_limit,
-                'infer_limit_batch_size': infer_limit_batch_size,
-                'hyperparameter_cascade': asdict(preset),
-            }
-        cascade_config = predictor.fit_cascade(**fit_cascade_params)
-        print(f'cascade_config={cascade_config}')
-        # DEBUG to see whether simulation is close to reality
-        test_data_sampled = test_data.sample(n=infer_limit_batch_size, replace=True, random_state=0)
-        pred_time_test_list = []
-        for i in range(n_repeats):
-            pred_time_test, _ = predictor.do_infer_with_cascade_conf(cascade_config, test_data_sampled)
-            pred_time_test_list.append(pred_time_test)
-        pred_time_test = np.mean(pred_time_test_list)
-        pred_time_test_per_row = pred_time_test / infer_limit_batch_size
-        _, pred_proba = predictor.do_infer_with_cascade_conf(cascade_config, test_data)
-        cascade_test_metrics = predictor.evaluate_predictions(y_true=test_data[label], y_pred=pred_proba, silent=True)
-        score_test = cascade_test_metrics[predictor.eval_metric.name]
-        print(f'[INFO] cascade infer_time sec/row={pred_time_test_per_row}, {predictor.eval_metric.name}={score_test}')
-        print(f'cascade pred_time_test={pred_time_test}')
+        for infer_limit in [None, 5e-5]:
+            fit_cascade_params = {
+                    'raw_data_for_infer_speed': test_data,
+                    'infer_limit': infer_limit,
+                    'infer_limit_batch_size': infer_limit_batch_size,
+                    'hyperparameter_cascade': asdict(preset),
+                }
+            cascade_config = predictor.fit_cascade(**fit_cascade_params)
+            print(f'[INFO] fit_cascade ret cascade_config={cascade_config}')
+            # DEBUG to see whether simulation is close to reality
+            test_data_sampled = test_data.sample(n=infer_limit_batch_size, replace=True, random_state=0)
+            pred_time_test_list = []
+            for i in range(n_repeats):
+                pred_time_test, _ = predictor.do_infer_with_cascade_conf(cascade_config, test_data_sampled)
+                pred_time_test_list.append(pred_time_test)
+            pred_time_test = np.mean(pred_time_test_list)
+            pred_time_test_per_row = pred_time_test / infer_limit_batch_size
+            _, pred_proba = predictor.do_infer_with_cascade_conf(cascade_config, test_data)
+            cascade_test_metrics = predictor.evaluate_predictions(y_true=test_data[label], y_pred=pred_proba, silent=True)
+            score_test = cascade_test_metrics[predictor.eval_metric.name]
+            print(f'[INFO] TEST cascade infer_time sec/row={pred_time_test_per_row}, {predictor.eval_metric.name}={score_test}')
+            print(f'[INFO] TESt cascade pred_time_test={pred_time_test}')
         exit(0)
         #for infer_limit in [None, 0.1, 0.05, 0.01, 0.001]:
         for goodness_weights in [(-1.0, 1e-4), (-1.0, 1e-5)]:
