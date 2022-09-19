@@ -3339,7 +3339,6 @@ class TabularPredictor:
         Returns: CascadeConfig
             A custom class that carries all necessary information of a built cascade.
         """
-        ts = time.time()
         from dataclasses import asdict
         from .cascade_do_no_harm import MODEL, COLS_REPrt
         from .cascade_do_no_harm import AGCasGoodness, AGCasAccuracy, F2SP_Preset, GreedyP_Preset
@@ -3353,6 +3352,8 @@ class TabularPredictor:
         
         clean_partial_weighted_ensembles(self)
         self.persist_models('all', max_memory=max_memory)
+        # clean and persist time not include in fit_cascade training duration
+        ts = time.time()
         val_data, is_trained_bagging = helper_get_val_data(self)
         # get *genuine* speed
         genuine_ts = time.time()
