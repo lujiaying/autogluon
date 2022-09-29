@@ -51,6 +51,7 @@ def main(args: argparse.Namespace):
     for cpp_session in os.listdir(args.cpp_dir):
         if args.session_names != None and cpp_session not in args.session_names:
             print(f'DEBUG skip {cpp_session}')
+            continue
         session_ts = time.time()
         train_fpath = get_parquet_path(os.path.join(args.cpp_dir, cpp_session, 'train'))
         test_fpath = get_parquet_path(os.path.join(args.cpp_dir, cpp_session, 'test'))
