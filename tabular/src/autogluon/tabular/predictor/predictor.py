@@ -4,6 +4,7 @@ import logging
 import math
 import os
 import pprint
+import shutil
 import time
 from typing import Union, Dict, Tuple
 from autogluon.tabular import predictor
@@ -3260,6 +3261,103 @@ class TabularPredictor:
         cls, columns = imodels.explain_classification_errors(data, predictions, labels, print_rules=print_rules)
         return cls
 
+
+    # TODO: Add .delete() method to easily clean-up clones?
+    #  Would need to be careful that user doesn't delete important things accidentally.
+    # TODO: Add .save_zip() and load_zip() methods to pack and unpack artifacts into a single file to simplify deployment code?
+    def clone(self,
+              path: str,
+              *,
+              return_clone: bool = False,
+              dirs_exist_ok: bool = False):
+        """
+        Clone the predictor and all of its artifacts to a new location on local disk.
+        This is ideal for use-cases where saving a snapshot of the predictor is desired before performing
+        more advanced operations (such as fit_extra and refit_full).
+
+        Parameters
+        ----------
+        path : str
+            Directory path the cloned predictor will be saved to.
+        return_clone : bool, default = False
+            If True, returns the loaded cloned TabularPredictor object.
+            If False, returns the local path to the cloned TabularPredictor object.
+        dirs_exist_ok : bool, default = False
+            If True, will clone the predictor even if the path directory already exists, potentially overwriting unrelated files.
+            If False, will raise an exception if the path directory already exists and avoid performing the copy.
+
+        Returns
+        -------
+        If return_clone == True, returns the loaded cloned TabularPredictor object.
+        If return_clone == False, returns the local path to the cloned TabularPredictor object.
+
+        """
+        assert path != self.path, f"Cannot clone into the same directory as the original predictor! (path='{path}')"
+        path_clone = shutil.copytree(src=self.path, dst=path, dirs_exist_ok=dirs_exist_ok)
+        logger.log(30, f"Cloned {self.__class__.__name__} located in '{self.path}' to '{path_clone}'.\n"
+                       f"\tTo load the cloned predictor: predictor_clone = {self.__class__.__name__}.load(path=\"{path_clone}\")")
+        return self.__class__.load(path=path_clone) if return_clone else path_clone
+
+
+    def clone_for_deployment(self,
+                             path: str,
+                             *,
+                             model: str = 'best',
+                             return_clone: bool = False,
+                             dirs_exist_ok: bool = False):
+        """
+        Clone the predictor and all of its artifacts to a new location on local disk,
+        then delete the clones artifacts unnecessary during prediction.
+        This is ideal for use-cases where saving a snapshot of the predictor is desired before performing
+        more advanced operations (such as fit_extra and refit_full).
+
+        Note that the clone can no longer fit new models,
+        and most functionality except for predict and predict_proba will no longer work.
+
+        Identical to performing the following operations in order:
+
+        predictor_clone = predictor.clone(path=path, return_clone=True, dirs_exist_ok=dirs_exist_ok)
+        predictor_clone.delete_models(models_to_keep=model, dry_run=False)
+        predictor_clone.set_model_best(model=model, save_trainer=True)
+        predictor_clone.save_space()
+
+        Parameters
+        ----------
+        path : str
+            Directory path the cloned predictor will be saved to.
+        model : str, default = 'best'
+            The model to use in the optimized predictor clone.
+            All other unrelated models will be deleted to save disk space.
+            Refer to the `models_to_keep` argument of `predictor.delete_models` for available options.
+            Internally calls `predictor_clone.delete_models(models_to_keep=model, dry_run=False)`
+        return_clone : bool, default = False
+            If True, returns the loaded cloned TabularPredictor object.
+            If False, returns the local path to the cloned TabularPredictor object.
+        dirs_exist_ok : bool, default = False
+            If True, will clone the predictor even if the path directory already exists, potentially overwriting unrelated files.
+            If False, will raise an exception if the path directory already exists and avoids performing the copy.
+
+        Returns
+        -------
+        If return_clone == True, returns the loaded cloned TabularPredictor object.
+        If return_clone == False, returns the local path to the cloned TabularPredictor object.
+        """
+        predictor_clone = self.clone(path=path, return_clone=True, dirs_exist_ok=dirs_exist_ok)
+        if model == 'best':
+            model = predictor_clone.get_model_best()
+            logger.log(30, f"Clone: Keeping minimum set of models required to predict with best model '{model}'...")
+        else:
+            logger.log(30, f"Clone: Keeping minimum set of models required to predict with model '{model}'...")
+        predictor_clone.delete_models(models_to_keep=model, dry_run=False)
+        if isinstance(model, str) and model in predictor_clone.get_model_names(can_infer=True):
+            predictor_clone.set_model_best(model=model, save_trainer=True)
+        logger.log(30, f"Clone: Removing artifacts unnecessary for prediction. "
+                       f"NOTE: Clone can no longer fit new models, and most functionality except for predict and predict_proba will no longer work")
+        predictor_clone.save_space()
+        return predictor_clone if return_clone else predictor_clone.path
+
+    
+
     def _assert_is_fit(self, message_suffix: str = None):
         if not self._learner.is_fit:
             error_message = "Predictor is not fit. Call `.fit` before calling"
@@ -3351,7 +3449,6 @@ class TabularPredictor:
             infer_limit_batch_size = 10000  # use default
         
         clean_partial_weighted_ensembles(self)
-        self.persist_models('all', max_memory=max_memory)
         # clean and persist time not include in fit_cascade training duration
         ts = time.time()
         val_data, is_trained_bagging = helper_get_val_data(self)
@@ -3359,6 +3456,7 @@ class TabularPredictor:
         genuine_ts = time.time()
         leaderboard, (time_per_row_df_val, time_per_row_transform_val) = get_genunie_pred_val_time_leaderboard(self, 
                 raw_data_for_infer_speed, len(val_data[0]), infer_limit_batch_size)
+        self.persist_models('all', max_memory=max_memory)
         genuine_te = time.time()
         print(f'[DEBUG] get genuine speed cost {genuine_te-genuine_ts} seconds')
         print(f'Get genuine speed/val_time per infer_limit_batch_size={infer_limit_batch_size}, only for can_infer models')

@@ -100,7 +100,7 @@ def main(args: argparse.Namespace):
             id=f'CPP{cpp_session}',
             task=cpp_session,
             framework='AGv053_Aug31_high',  # TODO: change when using other
-            constraint=f'{int(args.fit_time_limit/3600)}h8c_nd4g.2xlarge',
+            constraint=f'{int(args.fit_time_limit/3600)}h8c_nd4g.2xlarge',  # TODO: nd4g means g4dn
             fold=-1,
             type='binary',
             metric=args.eval_metric,

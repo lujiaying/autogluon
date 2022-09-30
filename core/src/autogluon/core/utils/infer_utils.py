@@ -55,16 +55,30 @@ def get_model_true_infer_speed_per_row_batch(
     if len_data != batch_size:
         raise AssertionError(f'len(data_batch) must equal batch_size! ({len_data} != {batch_size})')
 
-    predictor.persist_models(models='all')
-
     ts = time.time()
     for i in range(repeats):
         predictor.transform_features(data_batch)
     time_transform = (time.time() - ts) / repeats
 
+    # delete these models to speed up, due to some reason these bag models 'can_infer' == True
+    models_to_delete = set(["ImagePredictor_BAG_L1", "TextPredictor_BAG_L1"])
+    can_infer_models = set(predictor.get_model_names(can_infer=True))
+    models_to_delete = list(models_to_delete.intersection(can_infer_models))
+    if len(models_to_delete) > 0:
+         import tempfile
+         print(f'[DEBUG] delete models: for get_genuine_speed {models_to_delete}')
+         with tempfile.TemporaryDirectory() as tmp_dir:
+            # will clean up tmp dir afterwards
+            predictor_cp = predictor.clone(tmp_dir, return_clone=True, dirs_exist_ok=True)
+            predictor_cp.delete_models(models_to_delete=["ImagePredictor_BAG_L1", "TextPredictor_BAG_L1"], delete_from_disk=False, 
+                                        allow_delete_cascade=True, dry_run=False)
+            predictor_cp.persist_models(models='all', max_memory=0.5)
+    else:
+        predictor_cp = predictor
+        predictor_cp.persist_models(models='all', max_memory=0.5)
     leaderboards = []
     for i in range(repeats):
-        leaderboard = predictor.leaderboard(data_batch, silent=True)
+        leaderboard = predictor_cp.leaderboard(data_batch, silent=True)
         leaderboard = leaderboard[leaderboard['can_infer']][['model', 'pred_time_test', 'pred_time_test_marginal']]
         leaderboard = leaderboard.set_index('model')
         leaderboards.append(leaderboard)
@@ -96,4 +110,5 @@ def get_model_true_infer_speed_per_row_batch(
                 unit = 'μs'
         print(f"{round(time_per_row_transform_print, 3)}{unit} per row | transform_features")
 
+    predictor_cp.unpersist_models()
     return time_per_row_df, time_per_row_transform
