@@ -45,13 +45,20 @@ def load_cpp_dataset(fpath: str, image_map_func: Callable[[str], str]) -> Tuple[
 
 
 def main(args: argparse.Namespace):
+    assert (args.session_names is None) or (args.session_start_end is None)  # can not true for both
     random.seed(args.seed)
     image_id_to_path_cpp = partial(image_id_to_path, args.cpp_img_dir, 'jpg')
     # traversal
-    for cpp_session in os.listdir(args.cpp_dir):
+    for cpp_sess_idx, cpp_session in enumerate(sorted(os.listdir(args.cpp_dir))):
         if args.session_names != None and cpp_session not in args.session_names:
             print(f'DEBUG skip {cpp_session}')
             continue
+        if args.session_start_end != None:
+            assert len(args.session_start_end) == 2
+            i_start, i_end = args.session_start_end
+            if not (i_start <= cpp_sess_idx <= i_end):
+                continue
+            print(f'idx={cpp_sess_idx}, cpp_session={cpp_session} HIT Condition!!')
         session_ts = time.time()
         train_fpath = get_parquet_path(os.path.join(args.cpp_dir, cpp_session, 'train'))
         test_fpath = get_parquet_path(os.path.join(args.cpp_dir, cpp_session, 'test'))
@@ -145,6 +152,7 @@ if __name__ == '__main__':
     parser.add_argument('--infer_limit_batch_size', type=int, default=10000)
     parser.add_argument('--eval_metric', type=str, default='acc')
     parser.add_argument('--session_names', type=str, nargs='+', default=None)
+    parser.add_argument('--session_start_end', type=int, nargs='+', default=None)
 
     args = parser.parse_args()
     print(f'Exp arguments: {args}')

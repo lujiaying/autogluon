@@ -13,5 +13,11 @@
 #     --session_names 060016f7-0d1d-41a4-83e0-cd1eb254b140 eb920d43-2d72-4744-852e-2a5deb8cdfc0 f29d388f-4f4a-4160-99cb-6aef2f5be7f1
 
 # Sep 29
-python -m cascade_scripts.exec_fit_cascade_post_cpp \
-    --cpp_result_dir ExpResults/CPP-Benchmark-n4dg.2xlarge-4h8c-Sep182022
+# python -m cascade_scripts.exec_fit_cascade_post_cpp \
+#     --cpp_result_dir ExpResults/CPP-Benchmark-n4dg.2xlarge-4h8c-Sep182022
+
+# Oct 2
+python cascade_scripts/benchmark_cpp.py \
+    --fit_infer_limit 5e-3 \
+    --exp_result_save_dir ExpResults/CPP-Benchmark-n4dg.2xlarge-4h8c-Sep282022-fit_infer_limit5ms \
+    --session_start_end 5 9
