@@ -70,7 +70,7 @@ def get_model_true_infer_speed_per_row_batch(
          with tempfile.TemporaryDirectory() as tmp_dir:
             # will clean up tmp dir afterwards
             predictor_cp = predictor.clone(tmp_dir, return_clone=True, dirs_exist_ok=True)
-            predictor_cp.delete_models(models_to_delete=["ImagePredictor_BAG_L1", "TextPredictor_BAG_L1"], delete_from_disk=False, 
+            predictor_cp.delete_models(models_to_delete=models_to_delete, delete_from_disk=False, 
                                         allow_delete_cascade=True, dry_run=False)
             predictor_cp.persist_models(models='all', max_memory=0.5)
     else:

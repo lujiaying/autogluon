@@ -91,11 +91,12 @@ def main(args: argparse.Namespace):
     # traversal dir
     for cpp_session in os.listdir(args.cpp_result_dir):
         if args.session_names != None and cpp_session not in args.session_names:
-            print(f'DEBUG skip {cpp_session}')
+            print(f'[DEBUG] skip {cpp_session}')
             continue
         # whether scores already exist
         cascade_result_path = os.path.join(args.cpp_result_dir, cpp_session, 'scores', args.cascade_result_fname)
         if os.path.exists(cascade_result_path):
+            print(f'[DEBUG] skip {cpp_session} because already have cascade_result')
             continue
         test_fpath = get_parquet_path(os.path.join(args.cpp_dir, cpp_session, 'test')) 
         test_data, feature_metadata = load_cpp_dataset(test_fpath, image_id_to_path_cpp)
@@ -113,7 +114,7 @@ def main(args: argparse.Namespace):
         cascade_results['type'] = ['binary' for _ in range(len(cascade_results))]
         cascade_results['metric'] = [eval_metric for _ in range(len(cascade_results))]
         cascade_results['score'] = [cascade_results[eval_metric][_] for _ in range(len(cascade_results))]
-        cascade_results.to_csv(cascade_result_path)
+        cascade_results.to_csv(cascade_result_path, index=False)
         print(f'[INFO] cascade results written into {cascade_result_path}')
 
 
