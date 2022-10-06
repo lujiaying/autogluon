@@ -50,8 +50,9 @@ def main(args: argparse.Namespace):
     image_id_to_path_cpp = partial(image_id_to_path, args.cpp_img_dir, 'jpg')
     # traversal
     for cpp_sess_idx, cpp_session in enumerate(sorted(os.listdir(args.cpp_dir))):
+        # skip by input args
         if args.session_names != None and cpp_session not in args.session_names:
-            print(f'DEBUG skip {cpp_session}')
+            print(f'[DEBUG] skip {cpp_session}')
             continue
         if args.session_start_end != None:
             assert len(args.session_start_end) == 2
@@ -59,6 +60,11 @@ def main(args: argparse.Namespace):
             if not (i_start <= cpp_sess_idx <= i_end):
                 continue
             print(f'idx={cpp_sess_idx}, cpp_session={cpp_session} HIT Condition!!')
+        # skip if already exist trained models
+        exp_result_save_session_dir = os.path.join(args.exp_result_save_dir, cpp_session)
+        if os.path.exists(os.path.join(exp_result_save_session_dir, 'scores/result.csv')):
+            print(f'[DEBUG] skip {cpp_session} because already trained models')
+            continue
         session_ts = time.time()
         train_fpath = get_parquet_path(os.path.join(args.cpp_dir, cpp_session, 'train'))
         test_fpath = get_parquet_path(os.path.join(args.cpp_dir, cpp_session, 'test'))
@@ -75,7 +81,6 @@ def main(args: argparse.Namespace):
             infer_limit_batch_size=args.infer_limit_batch_size,
             feature_metadata=feature_metadata,
         )
-        exp_result_save_session_dir = os.path.join(args.exp_result_save_dir, cpp_session)
         if not os.path.exists(exp_result_save_session_dir):
             os.makedirs(exp_result_save_session_dir)
         predictor = TabularPredictor(
