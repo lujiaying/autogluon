@@ -103,4 +103,5 @@ if __name__ == '__main__':
     out_dir = 'cpp_report'
     # gather_all_ag_results(exp_result_dir, os.path.join(out_dir, 'CPP-Benchmark-n4dg.2xlarge-4h8c-Sep182022-all_results.csv'))
 
-    generate_report()
+    gather_all_cascade_results(exp_result_dir, out_dir)
+    # generate_report()

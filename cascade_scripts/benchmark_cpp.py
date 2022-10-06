@@ -84,57 +84,92 @@ def main(args: argparse.Namespace):
             path=os.path.join(exp_result_save_session_dir, 'models'),
         )
         ts = time.time()
-        predictor.fit(**fit_kwargs)
-        te = time.time()
-        training_duration = te - ts
-        predictor.persist_models()
-        # get test duration
-        ts = time.time()
-        score = predictor.evaluate(test_data)
-        te = time.time()
-        predict_duration = te - ts
-        # get genuine test duration
-        test_data_sampled = sample_df_for_time_func(df=test_data, sample_size=args.infer_limit_batch_size, 
-                                max_sample_size=args.infer_limit_batch_size)
-        ts = time.time()
-        _ = predictor.evaluate(test_data_sampled)
-        te = time.time()
-        predict_genuine_duration = te - ts
-        duration = te - session_ts
-        repo = git.Repo(search_parent_directories=True)
-        models_ensemble_count = len(get_all_predecessor_model_names(predictor, predictor.get_model_best()))
-        result = dict(
-            id=f'CPP{cpp_session}',
-            task=cpp_session,
-            framework='AGv053_Aug31_high',  # TODO: change when using other
-            constraint=f'{int(args.fit_time_limit/3600)}h8c_nd4g.2xlarge',  # TODO: nd4g means g4dn
-            fold=-1,
-            type='binary',
-            metric=args.eval_metric,
-            mode='local',
-            version=__version__,
-            params=json.dumps(args.__dict__),
-            app_version=json.dumps([repo.active_branch.name, repo.git.rev_parse(repo.head.object.hexsha, short=7)]),
-            utc=datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%S'),
-            duration=round(duration, 1),
-            training_duration=round(training_duration, 1),
-            predict_duration=round(predict_duration, 1),
-            models_count=len(predictor.get_model_names()),
-            seed=args.seed,
-            info=None,
-            acc=score['accuracy'],
-            auc=score['roc_auc'],
-            balacc=score['balanced_accuracy'],
-            logloss=-score['log_loss'],
-            f1=score['f1'],
-            models_ensemble_count=models_ensemble_count,
-            predict_genuine_duration=round(predict_genuine_duration),
-        )
-        result_df = pd.DataFrame.from_records([result])
-        result_dir = os.path.join(exp_result_save_session_dir, 'scores')
-        if not os.path.exists(result_dir):
-            os.makedirs(result_dir)
-        result_df.to_csv(os.path.join(result_dir, 'result.csv'), index=False)
+        try:
+            predictor.fit(**fit_kwargs)
+        except AssertionError as e:
+            te = time.time()
+            training_duration = te - ts
+            duration = te - ts
+            # if AssertionError: Trainer has no fit models that can infer while satisfying the constraints:
+            result = dict(
+                id=f'CPP{cpp_session}',
+                task=cpp_session,
+                framework='AGv053_Aug31_high',  # TODO: change when using other
+                constraint=f'{int(args.fit_time_limit/3600)}h8c_nd4g.2xlarge',  # TODO: nd4g means g4dn
+                fold=-1,
+                type='binary',
+                metric=args.eval_metric,
+                mode='local',
+                version=__version__,
+                params=json.dumps(args.__dict__),
+                app_version=json.dumps([repo.active_branch.name, repo.git.rev_parse(repo.head.object.hexsha, short=7)]),
+                utc=datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%S'),
+                duration=round(duration, 1),
+                training_duration=round(training_duration, 1),
+                predict_duration=None,
+                models_count=None,
+                seed=args.seed,
+                info=f'AssertionError from predictor.fit(): {e}',
+                acc=None,
+                auc=None,
+                balacc=None,
+                logloss=None,
+                f1=None,
+                models_ensemble_count=None,
+                predict_genuine_duration=None,
+            )
+        else:
+            te = time.time()
+            training_duration = te - ts
+            predictor.persist_models()
+            # get test duration
+            ts = time.time()
+            score = predictor.evaluate(test_data)
+            te = time.time()
+            predict_duration = te - ts
+            # get genuine test duration
+            test_data_sampled = sample_df_for_time_func(df=test_data, sample_size=args.infer_limit_batch_size, 
+                                    max_sample_size=args.infer_limit_batch_size)
+            ts = time.time()
+            _ = predictor.evaluate(test_data_sampled)
+            te = time.time()
+            predict_genuine_duration = te - ts
+            duration = te - session_ts
+            repo = git.Repo(search_parent_directories=True)
+            models_ensemble_count = len(get_all_predecessor_model_names(predictor, predictor.get_model_best()))
+            result = dict(
+                id=f'CPP{cpp_session}',
+                task=cpp_session,
+                framework='AGv053_Aug31_high',  # TODO: change when using other
+                constraint=f'{int(args.fit_time_limit/3600)}h8c_nd4g.2xlarge',  # TODO: nd4g means g4dn
+                fold=-1,
+                type='binary',
+                metric=args.eval_metric,
+                mode='local',
+                version=__version__,
+                params=json.dumps(args.__dict__),
+                app_version=json.dumps([repo.active_branch.name, repo.git.rev_parse(repo.head.object.hexsha, short=7)]),
+                utc=datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%S'),
+                duration=round(duration, 1),
+                training_duration=round(training_duration, 1),
+                predict_duration=round(predict_duration, 1),
+                models_count=len(predictor.get_model_names()),
+                seed=args.seed,
+                info=None,
+                acc=score['accuracy'],
+                auc=score['roc_auc'],
+                balacc=score['balanced_accuracy'],
+                logloss=-score['log_loss'],
+                f1=score['f1'],
+                models_ensemble_count=models_ensemble_count,
+                predict_genuine_duration=round(predict_genuine_duration),
+            )
+        finally:
+            result_df = pd.DataFrame.from_records([result])
+            result_dir = os.path.join(exp_result_save_session_dir, 'scores')
+            if not os.path.exists(result_dir):
+                os.makedirs(result_dir)
+            result_df.to_csv(os.path.join(result_dir, 'result.csv'), index=False)
 
 
 if __name__ == '__main__':

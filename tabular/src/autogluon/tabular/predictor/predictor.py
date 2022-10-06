@@ -3268,6 +3268,7 @@ class TabularPredictor:
     def clone(self,
               path: str,
               *,
+              require_version_match: bool = True,
               return_clone: bool = False,
               dirs_exist_ok: bool = False):
         """
@@ -3296,7 +3297,7 @@ class TabularPredictor:
         path_clone = shutil.copytree(src=self.path, dst=path, dirs_exist_ok=dirs_exist_ok)
         logger.log(30, f"Cloned {self.__class__.__name__} located in '{self.path}' to '{path_clone}'.\n"
                        f"\tTo load the cloned predictor: predictor_clone = {self.__class__.__name__}.load(path=\"{path_clone}\")")
-        return self.__class__.load(path=path_clone) if return_clone else path_clone
+        return self.__class__.load(path=path_clone, require_version_match=require_version_match) if return_clone else path_clone
 
 
     def clone_for_deployment(self,

@@ -100,7 +100,7 @@ def main(args: argparse.Namespace):
             continue
         test_fpath = get_parquet_path(os.path.join(args.cpp_dir, cpp_session, 'test')) 
         test_data, feature_metadata = load_cpp_dataset(test_fpath, image_id_to_path_cpp)
-        predictor = TabularPredictor.load(os.path.join(args.cpp_result_dir, cpp_session, 'models'))
+        predictor = TabularPredictor.load(os.path.join(args.cpp_result_dir, cpp_session, 'models'), require_version_match=False)
         cascade_results = exec_fit_cascade(predictor, test_data, args.cascade_algo_list, 
                 args.infer_limit_batch_size, args.infer_limit_list)
         print(f'cascade_results={cascade_results}')
