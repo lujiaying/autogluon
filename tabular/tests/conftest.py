@@ -299,7 +299,8 @@ class FitHelper:
         score_test = cascade_test_metrics[predictor.eval_metric.name]
         print(f'[INFO] cascade infer_time sec/row={pred_time_test_per_row}, {predictor.eval_metric.name}={score_test}')
         print(f'cascade pred_time_test={pred_time_test}')
-        assert pred_time_test_per_row <= (1 + cascade_time_diff) * infer_limit
+        if infer_limit:
+            assert pred_time_test_per_row <= (1 + cascade_time_diff) * infer_limit
         # clean up everything
         if delete_directory is True:
             shutil.rmtree(predictor.path, ignore_errors=True)  # Delete AutoGluon output directory to ensure runs' information has been removed.

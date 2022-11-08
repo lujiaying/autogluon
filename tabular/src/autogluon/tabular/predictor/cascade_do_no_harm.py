@@ -6,7 +6,7 @@ from typing import List, Tuple, Dict, Optional, Union, Set, Callable
 from functools import partial, reduce
 import operator
 import itertools
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass, asdict, field
 
 import pandas as pd
 import numpy as np
@@ -29,8 +29,8 @@ SPEED_ADJUSTED = 'speed_adjusted'
 PRED_TIME = 'pred_time_val'
 PERFORMANCE = 'score_val'
 METRIC_FUNC_MAP = {'accuracy': accuracy, 'acc': accuracy, 'roc_auc': roc_auc, 'log_loss': log_loss}
-THRESHOLDS_BINARY = [0.5, 0.6, 0.7, 0.8, 0.85, 0.9, 0.93, 0.95, 0.97, 1.0]
-THRESHOLDS_MULTICLASS = [0.0, 0.2, 0.4, 0.5, 0.6, 0.75, 0.8, 0.85, 0.9, 0.95, 1.0]
+THRESHOLDS_BINARY = [0.5, 1.0]
+THRESHOLDS_MULTICLASS = [0.0, 1.0]
 PWE_suffix = '_PWECascade'
 COLS_REPrt = [MODEL, PERFORMANCE, PRED_TIME]       # columns for AGCasGoodness
 RANDOM_MAGIC_NUM = 0
@@ -60,7 +60,7 @@ class F2SP_Preset:
     num_trials: int = 800
     searcher: str = 'TPE'
     hpo_score_func: str = 'ag_goodness'
-    hpo_score_func_kwargs: dict = None
+    hpo_score_func_kwargs: dict = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -69,7 +69,7 @@ class GreedyP_Preset:
     num_trials: int = 500
     searcher: str = 'TPE'
     hpo_score_func: str = 'ag_goodness'
-    hpo_score_func_kwargs: dict = None
+    hpo_score_func_kwargs: dict = field(default_factory=dict)
     each_config_num_trials: int = 50
 
 
@@ -77,7 +77,6 @@ class HPOScoreFunc(Enum):
     GOODNESS = 'GOODNESS'   # a metric considering both accuracy and speed
     TIME_BOUND_PERFORMANCE = 'TIME_BOUND_PERFORMANCE'   # maximize performance given min speed/infer time limit
     ACCURACY = 'ACCURACY'   # maximize accuracy given min speed/infer time limit; TODO: delete
-    # SPEED = 'SPEED'         # maximize speed given min accuracy
 
 
 class AbstractCasHpoFunc:
@@ -258,7 +257,7 @@ class AGCasAccuracy(AbstractCasHpoFunc):
         # the penalty: $f(t) = \alpha * (1 + e^{-(t - \mu) / \beta}) ^ {-1}$
         self.sigmoid_alpha = -20.0   # we will add penalty when time exceeds, assume roc, acc.
         self.sigmoid_mu = infer_time_ubound * 0.8  # when time reach mean, penalty = scale / 2
-        # we want $f(\tau) = \alpha * 0.9 = -0.01$ when \tau is the uboud
+        # we want $f(\tau) = \alpha * 0.9$ when \tau is the uboud
         self.sigmoid_beta = - (infer_time_ubound - self.sigmoid_mu) / np.log(1 / 0.9 - 1)
         assert self.sigmoid_beta > 0
 
@@ -291,7 +290,9 @@ def get_all_predecessor_model_names(predictor, model_name: Union[str, List[str]]
     print(f'[DEBUG in get_all_predecessor_model_names()] ends {result=} for in {model_name=}')
     """
     DAG = predictor._trainer.model_graph
+    #print(f'DAG, {DAG}')
     queue = [model_name] if isinstance(model_name, str) else model_name.copy()
+    queue_added = set(queue)   # avoid infinite queue loop
     result = set()
     if include_self:
         result.update(queue)
@@ -299,7 +300,9 @@ def get_all_predecessor_model_names(predictor, model_name: Union[str, List[str]]
         cur_model = queue.pop(0)
         for predecessor in DAG.predecessors(cur_model):
             result.add(predecessor)
-            queue.append(predecessor)
+            if predecessor not in queue_added:
+                queue.append(predecessor)
+                queue_added.add(predecessor)
     return result
 
 
@@ -421,12 +424,12 @@ def get_cascade_model_sequence_by_val_marginal_time(predictor,
         valid_cascade_models = predictor._trainer.get_minimum_model_set(best_model_name)
         model_sequence = [m for m in model_sequence if m in valid_cascade_models]
     if build_pwe_flag:
-        print(f'Fast-to-slow: before build_pwe, {model_sequence=}')
+        print(f'Fast-to-slow: before build_pwe, model_sequence={model_sequence}')
         model_sequence = translate_cascade_sequence_to_WE_version(model_sequence, predictor)
-        print(f'Fast-to-slow: after build_pwe, {model_sequence=}')
+        print(f'Fast-to-slow: after build_pwe, model_sequence={model_sequence}')
     leaderboard = predictor.leaderboard(silent=True).set_index(MODEL)
     if better_than_prev:
-        #print(f'before build pareto-frontier: {model_sequence=}')
+        #print(f'before build pareto-frontier: model_sequence={model_sequence}')
         tmp = []
         max_val_score = 0.0
         for model in model_sequence:
@@ -438,7 +441,7 @@ def get_cascade_model_sequence_by_val_marginal_time(predictor,
             max_val_score = val_score
             tmp.append(model)
         model_sequence = tmp
-        # print(f'after build pareto-frontier: {model_sequence=}')
+        # print(f'after build pareto-frontier: model_sequence={model_sequence}')
     return model_sequence
 
 
@@ -470,11 +473,12 @@ def get_models_pred_proba_on_val(predictor, models: List[str],
     else:
         # models Not use bagging strategy
         model_pred_proba_dict = trainer.get_model_pred_proba_dict(val_data[0], models=models)
+    assert leaderboard is not None
+    """
+    # TODO: need to fix this, because val_data internal NOT get correct feature_transfer time
     # get genuine infer_time
     val_label_ori = predictor.transform_labels(val_data[1], inverse=True)
     val_data_wlabel = pd.concat([val_data[0], val_label_ori], axis=1)
-    # TODO: need to fix this, because val_data internal NOT get correct feature_transfer time
-    assert leaderboard is not None
     if leaderboard is None:
         global INFER_UTIL_N_REPEATS
         n_repeats = INFER_UTIL_N_REPEATS
@@ -486,6 +490,10 @@ def get_models_pred_proba_on_val(predictor, models: List[str],
         # !! assume leaderboard contains genuine infer_time (already scaled with val data size)
         leaderboard = leaderboard.copy().set_index('model')
         model_pred_time_marginal_dict = {m: leaderboard.loc[m]['pred_time_val_marginal'] for m in models}
+    """
+    # !! assume leaderboard contains genuine infer_time (already scaled with val data size)
+    leaderboard = leaderboard.copy().set_index('model')
+    model_pred_time_marginal_dict = {m: leaderboard.loc[m]['pred_time_val_marginal'] for m in models}
     return model_pred_proba_dict, model_pred_time_marginal_dict, val_data
 
 
@@ -587,7 +595,7 @@ def get_cascade_metric_and_time_by_threshold(val_data: Tuple[np.ndarray, np.ndar
 
 def build_threshold_cands_dynamic(model_pred_proba_dict: Dict[str, np.ndarray],
         problem_type: str,
-        quantile_bins: List[float] = [0.2, 0.4, 0.6, 0.8],
+        quantile_bins: List[float] = [0.1, 0.5, 0.9],
         pdf_scale: float = 0.25) -> Dict[str, Tuple[np.ndarray, np.ndarray]]:
     model_threshold_cands_dict = {}
     for model, pred_proba in model_pred_proba_dict.items():
@@ -736,12 +744,12 @@ def hpo_multi_params_TPE(predictor, cascade_model_seq: List[str],
         val_data, _ = helper_get_val_data(predictor)
     # no need to proceed to hpo process
     if len(cascade_model_seq) == 1:
-        thresholds = (ts_min)
+        thresholds = ()
         metric_value, infer_time = get_cascade_metric_and_time_by_threshold(val_data, thresholds,
                 cascade_model_seq, model_pred_proba_dict, model_pred_time_marginal_dict, predictor)
         cascade_config = CascadeConfig(
             model=tuple(cascade_model_seq),
-            thresholds=(ts_min),
+            thresholds=thresholds,
             score_val=metric_value,
             pred_time_val=infer_time,
             hpo_score=None,
@@ -1065,7 +1073,7 @@ def prune_cascade_config(chosen_cascd_config: CascadeConfig, problem_type: str):
     if defin_exit_idx is not None:
         if defin_exit_idx == 0:
             # length=1 cascade case
-            cascd_config = CascadeConfig(model=tuple([chosen_cascd_config.model[0]]), thresholds=tuple([min_threshold]),
+            cascd_config = CascadeConfig(model=tuple([chosen_cascd_config.model[0]]), thresholds=(),
                     pred_time_val=chosen_cascd_config.pred_time_val, score_val=chosen_cascd_config.score_val, 
                     hpo_score=chosen_cascd_config.hpo_score, hpo_func_name=chosen_cascd_config.hpo_func_name
                     ) 
@@ -1087,11 +1095,8 @@ def prune_cascade_config(chosen_cascd_config: CascadeConfig, problem_type: str):
         model_kept = [m for i, m in enumerate(cascd_config.model) if i in mem_idx_kept]
         model_kept.append(cascd_config.model[-1])  # len(thresholds) + 1 = len(model)
         thresholds_kept = tuple([th for i, th in enumerate(cascd_config.thresholds) if i in mem_idx_kept])
-        if len(thresholds_kept) <= 0:
-            # len=1 cascade casse
-            thresholds_kept = tuple([0.0])
         assert len(model_kept) == len(thresholds_kept) + 1
-        cascd_config_pruned = CascadeConfig(model=model_kept, thresholds=thresholds_kept,
+        cascd_config_pruned = CascadeConfig(model=tuple(model_kept), thresholds=thresholds_kept,
                 pred_time_val=cascd_config.pred_time_val, score_val=cascd_config.score_val, 
                 hpo_score=cascd_config.hpo_score, hpo_func_name=cascd_config.hpo_func_name
                 ) 
