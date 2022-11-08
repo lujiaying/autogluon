@@ -29,8 +29,8 @@ SPEED_ADJUSTED = 'speed_adjusted'
 PRED_TIME = 'pred_time_val'
 PERFORMANCE = 'score_val'
 METRIC_FUNC_MAP = {'accuracy': accuracy, 'acc': accuracy, 'roc_auc': roc_auc, 'log_loss': log_loss}
-THRESHOLDS_BINARY = [0.5, 0.6, 0.7, 0.8, 0.85, 0.9, 0.93, 0.95, 0.97, 1.0]
-THRESHOLDS_MULTICLASS = [0.0, 0.2, 0.4, 0.5, 0.6, 0.75, 0.8, 0.85, 0.9, 0.95, 1.0]
+THRESHOLDS_BINARY = [0.5, 1.0]
+THRESHOLDS_MULTICLASS = [0.0, 1.0]
 PWE_suffix = '_PWECascade'
 COLS_REPrt = [MODEL, PERFORMANCE, PRED_TIME]       # columns for AGCasGoodness
 RANDOM_MAGIC_NUM = 0
@@ -257,7 +257,7 @@ class AGCasAccuracy(AbstractCasHpoFunc):
         # the penalty: $f(t) = \alpha * (1 + e^{-(t - \mu) / \beta}) ^ {-1}$
         self.sigmoid_alpha = -20.0   # we will add penalty when time exceeds, assume roc, acc.
         self.sigmoid_mu = infer_time_ubound * 0.8  # when time reach mean, penalty = scale / 2
-        # we want $f(\tau) = \alpha * 0.9 = -0.01$ when \tau is the uboud
+        # we want $f(\tau) = \alpha * 0.9$ when \tau is the uboud
         self.sigmoid_beta = - (infer_time_ubound - self.sigmoid_mu) / np.log(1 / 0.9 - 1)
         assert self.sigmoid_beta > 0
 
@@ -595,7 +595,7 @@ def get_cascade_metric_and_time_by_threshold(val_data: Tuple[np.ndarray, np.ndar
 
 def build_threshold_cands_dynamic(model_pred_proba_dict: Dict[str, np.ndarray],
         problem_type: str,
-        quantile_bins: List[float] = [0.2, 0.4, 0.6, 0.8],
+        quantile_bins: List[float] = [0.1, 0.5, 0.9],
         pdf_scale: float = 0.25) -> Dict[str, Tuple[np.ndarray, np.ndarray]]:
     model_threshold_cands_dict = {}
     for model, pred_proba in model_pred_proba_dict.items():

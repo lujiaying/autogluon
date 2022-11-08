@@ -17,7 +17,14 @@
 #     --cpp_result_dir ExpResults/CPP-Benchmark-n4dg.2xlarge-4h8c-Sep182022
 
 # Oct 2
-python cascade_scripts/benchmark_cpp.py \
-    --fit_infer_limit 5e-3 \
-    --exp_result_save_dir ExpResults/CPP-Benchmark-n4dg.2xlarge-4h8c-Sep282022-fit_infer_limit5ms \
-    --session_start_end 5 9
+# python cascade_scripts/benchmark_cpp.py \
+#     --fit_infer_limit 5e-3 \
+#     --exp_result_save_dir ExpResults/CPP-Benchmark-n4dg.2xlarge-4h8c-Sep282022-fit_infer_limit5ms \
+#     --session_start_end 0 4
+
+# Oct 6
+python -m cascade_scripts.exec_fit_cascade_post_cpp \
+    --cpp_result_dir ExpResults/CPP-Benchmark-n4dg.2xlarge-4h8c-Sep182022 \
+    --cascade_result_fname cascade_results_spec_less_thresholds.csv \
+    --session_names 3564a7a7-0e7c-470f-8f9e-5a029be8e616 \
+    --infer_limit_list 1.0 1e-2 5e-3 3e-3
