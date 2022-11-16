@@ -3380,8 +3380,8 @@ class TabularPredictor:
         We only use raw_data_for_infer_speed for calculating feature_transforming time purpose.
 
         infer_limit: float, default = None
-        The inference time limit in seconds per row to achieve. This is not gurantee because.
-
+        The inference time limit in seconds per row to achieve. This is not gurantee because returned artifact's inference time is simulated on validation dataset (we do NOT touch test set).
+e
         infer_limit_batch_size: int, default = None
             The batch size to use when predicting in bulk to estimate per-row inference time. Must be an integer greater than 0. If None and infer_limit is specified, will default to 10000.
 
@@ -3434,6 +3434,9 @@ class TabularPredictor:
                 'Greedy+': {'hpo_score_func': 'eval_metric'},
             }
             The above input hyperparamters would execute both 'F2S+' and 'Greedy+' cascade algorithms. Unspecified arguments would be set to default values.
+
+        max_memory: float, default = 0.3
+            used in predictor.persisit_models('all', max_memory=max_memory)
 
         Returns: CascadeConfig
             A custom class that carries all necessary information of a built cascade.
@@ -3575,14 +3578,23 @@ class TabularPredictor:
     def do_infer_with_cascade_conf(
             self,
             cascade_config: CascadeConfig,
-            test_data_sampled: pd.DataFrame,
+            test_data: pd.DataFrame,
             ) -> Tuple[float, np.ndarray]:
+        """
+        TODO: it is also possible to directly use trainer.get_model_pred_proba_dict()
+        Args:
+            cascade_config: A CascadeConfig instance that stores chosen configuration
+            test_data: the raw test data before transform_features()
+        Returns:
+            time_elapsed: float
+            pred_proba: np.ndarray
+        """
         if len(cascade_config.model) > 1:
             cascade_model_seq = list(cascade_config.model)
             ts = time.time()
             learner = self._learner
             trainer = self._trainer
-            test_data_X = self.transform_features(test_data_sampled)
+            test_data_X = self.transform_features(test_data)
             te_transform = time.time()
             model_pred_proba_dict = trainer.get_model_pred_proba_dict(
                     test_data_X, cascade_model_seq, fit=False,
@@ -3592,10 +3604,10 @@ class TabularPredictor:
             if learner.problem_type == BINARY:
                 pred_proba = LabelCleanerMulticlassToBinary.convert_binary_proba_to_multiclass_proba(pred_proba)
             te = time.time()
-            print(f'[DEBUG] feature_transform time {te_transform-ts}, feat trans time per row {(te_transform-ts)/len(test_data_sampled)}')
+            print(f'[DEBUG] feature_transform time {te_transform-ts}, feat trans time per row {(te_transform-ts)/len(test_data)}')
         else:
             ts = time.time()
-            pred_proba = self.predict_proba(test_data_sampled, model=cascade_config.model[0])
+            pred_proba = self.predict_proba(test_data, model=cascade_config.model[0])
             te = time.time()
         return te-ts, pred_proba
     # End Cascade Related Scripts
