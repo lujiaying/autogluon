@@ -44,7 +44,11 @@ def exec_fit_cascade(predictor: TabularPredictor, test_data: pd.DataFrame,
                                                 max_sample_size=infer_limit_batch_size)
     for infer_limit in infer_limit_list:
         for cascade_algo_name in cascade_algo_list:
-            preset = F2SP_Preset() if cascade_algo_name == 'F2S+' else GreedyP_Preset()
+            if infer_limit is not None:
+                hpo_score_func = 'eval_metric'
+            else:
+                hpo_score_func = 'ag_goodness'
+            preset = F2SP_Preset(hpo_score_func=hpo_score_func) if cascade_algo_name == 'F2S+' else GreedyP_Preset(hpo_score_func=hpo_score_func)
             fit_cascade_params = {
                 'raw_data_for_infer_speed': test_data,
                 'infer_limit': infer_limit,
