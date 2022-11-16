@@ -431,7 +431,7 @@ def get_cascade_model_sequence_by_val_marginal_time(predictor,
     if better_than_prev:
         #print(f'before build pareto-frontier: model_sequence={model_sequence}')
         tmp = []
-        max_val_score = 0.0
+        max_val_score = -float('inf')
         for model in model_sequence:
             val_score = leaderboard.loc[model][PERFORMANCE]
             # precessors = set(predictor._trainer.model_graph.predecessors(model))
